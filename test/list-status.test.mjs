@@ -64,15 +64,19 @@ test('status probes never unsubscribe a chat opened while the probe is pending',
  await promise;assert.deepEqual(follows,[true]);bridge.close();
 });
 
-test('status lookup has a global two-probe concurrency and four-per-window budget, without starving later rows',async()=>{
+test('cheap lookups do not consume the four-snapshot budget and both lanes share two workers',async()=>{
  let now=1000;const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
- const calls=[],resolvers=[];bridge.probeStatus=id=>{calls.push(id);return new Promise(resolve=>resolvers.push(()=>resolve({status:'waiting',pendingCount:1,completionKey:null})));};
+ const calls=[],owners=[],resolvers=[];let active=0,peak=0;
+ bridge.probeStatus=(id,options)=>{active++;peak=Math.max(peak,active);
+  if(options?.ownerOnly){owners.push(id);return new Promise(resolve=>queueMicrotask(()=>{active--;resolve({availability:'ready'});}));}
+  calls.push(id);return new Promise(resolve=>resolvers.push(()=>{active--;resolve({status:'waiting',availability:'ready',pendingCount:1,completionKey:null});}));
+ };
  const records=Array.from({length:10},(_,i)=>({id:'chat-'+i,status:'stopped',stamp:'same',pendingIds:[],completionKey:null}));
  const service=new ListStatus(bridge,{statusRecords:()=>records},{now:()=>now});
- for(let i=0;i<10;i++)service.read(records.map(r=>r.id));assert.equal(calls.length,2);
+ for(let i=0;i<10;i++)service.read(records.map(r=>r.id));await tick();assert.equal(calls.length,2);assert.equal(owners.length,10);
  resolvers.shift()();resolvers.shift()();await tick();assert.equal(calls.length,4);
  resolvers.shift()();resolvers.shift()();await tick();service.read([]);assert.equal(calls.length,4);
- now=7000;service.read(records.map(r=>r.id));assert.deepEqual(calls.slice(4),['chat-4','chat-5']);
+ now=7000;service.read(records.map(r=>r.id));await tick();assert.deepEqual(calls.slice(4),['chat-4','chat-5']);assert.equal(peak,2);
  service.close();for(const done of resolvers)done();await tick();
 });
 
@@ -97,16 +101,16 @@ test('existing live updates win over delayed probes and remain cached after leav
  service.close();assert.equal(bridge.listenerCount('thread-status'),0);
 });
 
-test('idle rows check ownership only, cache it and refresh full status only for a known pending state',async()=>{
+test('visible idle rows refresh cheap ownership within five seconds without subscribing to history',async()=>{
  let now=10000,calls=0;const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
- const options=[];bridge.probeStatus=async(id,option)=>{calls++;options.push(option);return option.ownerOnly?{availability:'ready'}:{status:'idle',availability:'ready',pendingCount:0,completionKey:'turn'};};
+ const options=[];bridge.probeStatus=async(id,option)=>{calls++;options.push(option);return option?.ownerOnly?{availability:'ready'}:{status:'idle',availability:'ready',pendingCount:0,completionKey:'turn'};};
  const row={id:'chat',status:'idle',stamp:'same',pendingIds:[],completionKey:'turn'};
  const service=new ListStatus(bridge,{statusRecords:()=>[row]},{now:()=>now});
- service.read(['chat']);await tick();
- for(let i=0;i<10;i++){now+=5000;service.read(['chat']);}assert.equal(calls,1);assert.equal(options[0].ownerOnly,true);
+ await service.refresh(['chat']);
+ for(let i=0;i<10;i++){now+=5000;await service.refresh(['chat']);}assert.equal(calls,11);assert.ok(options.every(x=>x.ownerOnly));
  bridge.emit('thread-status',{id:'chat',status:'waiting',pendingCount:1,completionKey:'turn'});
- assert.equal(service.read(['chat'])[0].status,'waiting');assert.equal(calls,1);
- now+=5000;service.read(['chat']);await tick();assert.equal(calls,2);assert.equal(options[1].ownerOnly,false);assert.equal(service.read(['chat'])[0].status,'idle');
+ assert.equal(service.read(['chat'])[0].status,'waiting');assert.equal(calls,11);
+ now+=5000;await service.refresh(['chat']);await tick();assert.equal(calls,13);assert.equal(options.at(-1)?.ownerOnly,undefined);assert.equal(service.read(['chat'])[0].status,'idle');
  service.close();
 });
 
@@ -149,4 +153,57 @@ test('an actual attach failure immediately replaces older ready availability wit
  bridge.emit('thread-availability',{id:'chat',availability:'notLoaded'});
  for(let i=0;i<5;i++)assert.equal(service.read(['chat'])[0].availability,'notLoaded');
  assert.equal(probes,1);service.close();assert.equal(bridge.listenerCount('thread-availability'),0);
+});
+
+test('a complete visible batch resolves in one refresh instead of waiting in four-row windows',async()=>{
+ const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();let calls=0;
+ bridge.probeStatus=async(id,options)=>{assert.equal(options.ownerOnly,true);calls++;return{availability:'notLoaded'};};
+ const records=Array.from({length:24},(_,i)=>({id:'chat-'+i,status:'idle',stamp:'same',pendingIds:[],completionKey:'old'}));
+ const service=new ListStatus(bridge,{statusRecords:ids=>records.filter(row=>ids.includes(row.id))});
+ service.read(records.map(row=>row.id),{observe:false});assert.equal(calls,0);
+ const result=await service.refresh(records.map(row=>row.id));assert.equal(calls,24);assert.ok(result.every(row=>row.availability==='notLoaded'));
+ await service.refresh(records.map(row=>row.id));assert.equal(calls,24);service.close();
+});
+
+test('completed background probes push metadata immediately without another list poll',async()=>{
+ const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();let complete;
+ bridge.probeStatus=async(id,options)=>options?.ownerOnly?{availability:'ready'}:new Promise(resolve=>{complete=resolve;});
+ const row={id:'chat',status:'stopped',stamp:'same',pendingIds:[],completionKey:null};
+ const service=new ListStatus(bridge,{statusRecords:()=>[row]});
+ const changed=new Promise(resolve=>service.on('change',rows=>{if(rows[0]?.status==='waiting')resolve(rows[0]);}));
+ await service.refresh(['chat']);await tick();assert.ok(complete);
+ complete({status:'waiting',availability:'ready',pendingCount:1,requestIds:['q'],completionKey:null});
+ let timer;const value=await Promise.race([changed,new Promise((resolve,reject)=>{timer=setTimeout(()=>reject(new Error('status update was not pushed')),1000);})]);clearTimeout(timer);
+ assert.equal(value.status,'waiting');assert.equal(Object.hasOwn(value,'requestIds'),false);service.close();
+});
+
+test('loading a stopped chat invalidates absence within five seconds and gets its current pending state',async()=>{
+ let now=10000,loaded=false;const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
+ bridge.probeStatus=async(id,options)=>options?.ownerOnly?{availability:loaded?'ready':'notLoaded'}:{status:'waiting',availability:'ready',pendingCount:1,completionKey:null};
+ const row={id:'chat',status:'stopped',stamp:'same',pendingIds:[],completionKey:null};
+ const service=new ListStatus(bridge,{statusRecords:()=>[row]},{now:()=>now});
+ assert.equal((await service.refresh(['chat']))[0].availability,'notLoaded');
+ loaded=true;now+=5000;await service.refresh(['chat']);await tick();
+ const current=service.read(['chat'],{observe:false})[0];assert.equal(current.availability,'ready');assert.equal(current.status,'waiting');service.close();
+});
+
+test('unchanged streaming status does not produce repeated list pushes',async()=>{
+ const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
+ const row={id:'chat',status:'idle',stamp:'same',pendingIds:[],completionKey:'old'};
+ const service=new ListStatus(bridge,{statusRecords:()=>[row]});service.read(['chat'],{observe:false});
+ let updates=0;service.on('change',()=>updates++);
+ const value={id:'chat',status:'running',availability:'ready',pendingCount:0,completionKey:null};
+ bridge.emit('thread-status',value);await new Promise(resolve=>setTimeout(resolve,40));assert.equal(updates,1);
+ for(let i=0;i<20;i++)bridge.emit('thread-status',value);
+ assert.equal(service.changeTimer,null);assert.equal(updates,1);
+ bridge.emit('thread-status',{...value,status:'waiting',pendingCount:1});await new Promise(resolve=>setTimeout(resolve,40));assert.equal(updates,2);service.close();
+});
+
+test('new native questions in stopped chats are detected without waiting for a database change',async()=>{
+ let now=10000,waiting=false;const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
+ bridge.probeStatus=async(id,options)=>options?.ownerOnly?{availability:'ready'}:{status:waiting?'waiting':'stopped',availability:'ready',pendingCount:waiting?1:0,completionKey:null};
+ const row={id:'chat',status:'stopped',stamp:'unchanged',pendingIds:[],completionKey:null};
+ const service=new ListStatus(bridge,{statusRecords:()=>[row]},{now:()=>now});await service.refresh(['chat']);await tick();
+ assert.equal(service.read(['chat'],{observe:false})[0].status,'stopped');
+ waiting=true;now+=5000;await service.refresh(['chat']);await tick();assert.equal(service.read(['chat'],{observe:false})[0].status,'waiting');service.close();
 });

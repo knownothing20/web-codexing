@@ -11,11 +11,15 @@ import { FrameReader, frame } from '../src/ipc.mjs';
 const base = resolve('.local'); mkdirSync(base, { recursive: true });
 const fixture = mkdtempSync(join(base, 'ui-test-')), id = randomUUID(), pipe = '\\\\.\\pipe\\remote-coding-ui-' + randomUUID();
 const statusMode=process.argv.includes('--status'),otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
+const manyMode=process.argv.includes('--many'),manyIds=new Set();
+let ownerReads=0,fullFollows=0;const checkedIds=new Set();
+const metrics=()=>{if(manyMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows}));};
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
 db.exec('CREATE TABLE threads (id TEXT PRIMARY KEY,name TEXT,title TEXT,cwd TEXT,updated_at INTEGER,model TEXT,archived INTEGER,agent_path TEXT,source TEXT,rollout_path TEXT)');
 db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, '手机问答验收 · 隔离测试', '手机问答验收 · 隔离测试', resolve('.'), Math.floor(Date.now()/1000), 'test', 0, null, 'vscode', '');
 if(statusMode)db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(otherId,'另一个会话 · 隔离测试','另一个会话 · 隔离测试',resolve('.'),Math.floor(Date.now()/1000)+5,'test',0,null,'vscode','');
 if(statusMode)db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(unloadedId,'尚未打开 · 隔离测试','尚未打开 · 隔离测试',resolve('.'),Math.floor(Date.now()/1000)-5,'test',0,null,'vscode','');
+if(manyMode)for(let i=0;i<40;i++){const next=randomUUID();manyIds.add(next);db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(next,'列表性能测试 '+String(i+1).padStart(2,'0'),'列表性能测试',resolve('.'),Math.floor(Date.now()/1000)-10-i,'test',0,null,'vscode','');}
 db.close();
 const history = new DatabaseSync(join(fixture, 'thread_history_1.sqlite'));
 history.exec('CREATE TABLE thread_items (thread_id TEXT,turn_id TEXT,rollout_ordinal INTEGER,item_id TEXT,item_type TEXT,item_json TEXT,created_at_ms INTEGER)');
@@ -36,7 +40,8 @@ const fake = net.createServer(socket => {
   if (!online) {socket.destroy();return;} sockets.add(socket); socket.on('close',()=>sockets.delete(socket));
   const reader = new FrameReader(message=>{
     if (message.type==='request') {
-      if(message.method==='thread-owner-discovery'&&message.params.conversationId===unloadedId&&!missingLoaded){socket.write(frame({type:'response',requestId:message.requestId,resultType:'error',error:'no-client-found'}));return;}
+      if(message.method==='thread-owner-discovery'){ownerReads++;checkedIds.add(message.params.conversationId);metrics();}
+      if(message.method==='thread-owner-discovery'&&(message.params.conversationId===unloadedId&&!missingLoaded||manyIds.has(message.params.conversationId))){socket.write(frame({type:'response',requestId:message.requestId,resultType:'error',error:'no-client-found'}));return;}
       let result={}; if(message.method==='initialize')result={clientId:'fixture-client'};
       if(message.method==='thread-follower-submit-user-input') {
         writeFileSync(join(fixture,'receipt.json'),JSON.stringify(message.params.response));
@@ -59,7 +64,7 @@ const fake = net.createServer(socket => {
         setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
       }
       socket.write(frame({type:'response',requestId:message.requestId,method:message.method,handledByClientId:'fixture-owner',resultType:'success',result}));
-    } else if(message.method==='thread-stream-following-changed' && message.params.following)broadcast(socket,message.params.conversationId);
+    } else if(message.method==='thread-stream-following-changed' && message.params.following){fullFollows++;metrics();broadcast(socket,message.params.conversationId);}
   }); socket.on('data',data=>reader.push(data));
 });
 await new Promise(resolve=>fake.listen(pipe,resolve));

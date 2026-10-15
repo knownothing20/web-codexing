@@ -1,4 +1,4 @@
-import { createReadTracker } from './read-state.js?v=24';
+import { createReadTracker } from './read-state.js?v=25';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -7,7 +7,7 @@ const drafts = new Map(), messageMap = new Map(), messageNodes = new Map();
 const contexts = new Map(), inputDrafts = new Map(), inputStates = new Map();
 const threadCompletion = new Map();
 const threadStatuses = new Map(), liveStatusAt = new Map();
-let statusRefreshing=false,lastListRead=0;
+let statusRefreshing=false,lastListRead=0,statusScrollTimer,statusRefreshAgain=false;
 let displayedCompletionKey = null;
 let browserStorage;
 try { browserStorage=localStorage; } catch { browserStorage={getItem:()=>null,setItem:()=>{}}; }
@@ -93,7 +93,7 @@ async function api(path, options = {}) {
   const data = await response.json();
   if (!response.ok) {
     if (response.status === 401 && path !== '/api/pair') showPair();
-    const err = new Error(data.error || '请求失败'); err.unknown = data.unknown; throw err;
+    const err = new Error(data.error || '请求失败'); err.unknown = data.unknown;err.status=response.status; throw err;
   }
   return data;
 }
@@ -594,6 +594,7 @@ async function loadThreads(append = false) {
     }
     $('integration-panel').hidden = !!currentId || activeProvider === 'codex';
     if (!currentId && activeProvider !== 'codex') renderIntegration();
+    requestAnimationFrame(()=>refreshThreadStatuses());
   } catch (err) { toast(err.message); if (activeProvider !== 'codex') renderIntegration(err.message); }
   finally { if (generation === listGeneration) $('refresh-list').disabled = false; }
 }
@@ -618,17 +619,28 @@ function paintThreadStatus(id,status,completionKey,completedAt,availability) {
   icon.textContent=names[status][0]+(['running','waiting','unread','stopped'].includes(status)?' '+names[status][1]:'');
 }
 function listIsVisible(){return !$('workspace').hidden&&!document.hidden&&($('sidebar').classList.contains('open')||window.matchMedia('(min-width: 721px)').matches);}
+function visibleThreadIds() {
+  const bounds=$('threads').getBoundingClientRect();
+  return [...$('threads').children].filter(el=>{const r=el.getBoundingClientRect();return r.bottom>bounds.top&&r.top<bounds.bottom;}).map(el=>el.dataset.id).filter(Boolean).slice(0,24);
+}
 async function refreshThreadStatuses() {
-  if(!csrf||activeProvider!=='codex'||statusRefreshing||!listIsVisible())return;
-  const ids=[...$('threads').children].map(el=>el.dataset.id).filter(Boolean).slice(0,120);
+  if(!csrf||activeProvider!=='codex'||!listIsVisible())return;
+  if(statusRefreshing){statusRefreshAgain=true;return;}
+  const ids=visibleThreadIds();
   if(!ids.length)return;
   statusRefreshing=true;const started=Date.now(),generation=listGeneration;
   try {
-    const data=await post('/api/thread-statuses',{ids});
+    let data;
+    try{data=await post('/api/thread-statuses',{ids});}
+    catch(err){
+      if(err.status!==403)throw err;
+      const session=await api('/api/status');csrf=session.csrf;
+      data=await post('/api/thread-statuses',{ids});
+    }
     if(activeProvider!=='codex'||generation!==listGeneration||!listIsVisible())return;
     for(const thread of data.threads)if(!(liveStatusAt.get(thread.id)>=started))paintThreadStatus(thread.id,thread.status,thread.completionKey,thread.completedAt,thread.availability);
   } catch { /* The chat connection owns offline notices; keep the last list on a transient failure. */ }
-  finally {statusRefreshing=false;}
+  finally {statusRefreshing=false;if(statusRefreshAgain){statusRefreshAgain=false;requestAnimationFrame(()=>refreshThreadStatuses());}}
 }
 function disconnect() { source?.close(); source = null; }
 function connectEvents(id, generation) {
@@ -644,6 +656,13 @@ function connectEvents(id, generation) {
   source.onmessage = event => {
     if (generation !== openGeneration) return;
     const data = JSON.parse(event.data);
+    if(data.type==='list-status') {
+      if(activeProvider==='codex'&&listIsVisible())for(const row of data.threads || []) {
+        liveStatusAt.set(row.id,Date.now());if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
+        paintThreadStatus(row.id,row.status,row.completionKey,row.completedAt,row.availability);
+      }
+      return;
+    }
     if (data.type === 'connection') {
       writable = !!data.writable;
       if(activeProvider==='codex') {
@@ -688,7 +707,7 @@ function connectEvents(id, generation) {
   source.onerror = () => {
     if (generation !== openGeneration) return;
     writable = false; offline('网页与电脑的连接中断，正在恢复。历史和草稿仍可查看。'); setConnection('连接中断，正在恢复…', false); renderRequests(requestsNow); updateComposer();
-    api('/api/status').catch(() => {});
+    api('/api/status').then(status=>{csrf=status.csrf;}).catch(() => {});
   };
 }
 async function openThread(id, title) {
@@ -763,6 +782,7 @@ $('close-sidebar').onclick = $('scrim').onclick = () => setSidebar(false);
 $('refresh-list').onclick = () => loadThreads();
 $('refresh-quota').onclick = () => loadQuota(true);
 $('more-threads').onclick = () => loadThreads(true);
+$('threads').addEventListener('scroll',()=>{clearTimeout(statusScrollTimer);statusScrollTimer=setTimeout(()=>refreshThreadStatuses(),120);},{passive:true});
 let searchTimer;
 $('search').oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { listQuery = $('search').value.trim(); loadThreads(); }, 350); };
 $('reconnect').onclick = () => { if (currentId) openThread(currentId, $('thread-title').textContent); else loadThreads(); };

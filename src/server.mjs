@@ -185,14 +185,14 @@ async function handler(req, res) {
   if (req.method === 'GET' && path === '/api/threads') {
     const offset = Math.max(0, Math.min(10000, Number(url.searchParams.get('offset')) || 0));
     const threads = catalog.list({ offset, search: (url.searchParams.get('q') || '').slice(0, 80) });
-    const statuses=new Map(listStatus.read(threads.map(t=>t.id)).map(t=>[t.id,t]));
+    const statuses=new Map(listStatus.read(threads.map(t=>t.id),{observe:false}).map(t=>[t.id,t]));
     for(const thread of threads)Object.assign(thread,statuses.get(thread.id));
     return json(res, 200, { threads, next: threads.length === 40 ? offset + 40 : null });
   }
   if(req.method==='POST' && path==='/api/thread-statuses') {
     const data=await body(req);
     if(!Array.isArray(data.ids)||data.ids.length>120||data.ids.some(id=>typeof id!=='string'||!/^[0-9a-f-]{36}$/.test(id)))return json(res,400,{error:'最多查询 120 条会话状态'});
-    return json(res,200,{threads:listStatus.read(data.ids)});
+    return json(res,200,{threads:await listStatus.refresh(data.ids)});
   }
   if (req.method === 'GET' && path === '/api/models') return json(res, 200, await getModels());
   if (req.method === 'GET' && path === '/api/providers') return json(res, 200, { providers: [
@@ -288,7 +288,7 @@ async function handler(req, res) {
     let closed = false, unsubscribe;
     const cleanup = () => {
       if (closed) return; closed = true;
-      clearInterval(heartbeat); unsubscribe?.(); streams.delete(stream); res.end();
+      clearInterval(heartbeat);listStatus.off('change',sendStatuses); unsubscribe?.(); streams.delete(stream); res.end();
     };
     const stream = { sid: s.sid, close: cleanup };
     streams.add(stream);
@@ -297,6 +297,8 @@ async function handler(req, res) {
       if (res.writableLength > 512 * 1024) return cleanup();
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
+    const sendStatuses=threads=>send({type:'list-status',threads});
+    listStatus.on('change',sendStatuses);
     const heartbeat = setInterval(() => {
       if (!session(req)) return cleanup();
       res.write(': ping\n\n');

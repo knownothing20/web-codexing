@@ -90,6 +90,9 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     assert.match(text, /真实协议测试/);
     const input = () => fetch(url + `/api/threads/${id}/input`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: JSON.stringify({ requestId: 'question', answers: { choice: '选项一' } }) });
     assert.equal((await input()).status, 200); assert.equal((await input()).status, 200); assert.equal(answered, 1);
+    while(!text.includes('"type":"list-status"')){const chunk=await reader.read();text+=new TextDecoder().decode(chunk.value);}
+    const pushed=text.split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6))).find(value=>value.type==='list-status');
+    assert.ok(pushed.threads.length);assert.equal(Object.hasOwn(pushed.threads[0],'requestIds'),false);
     const messageId = randomUUID();
     const send = () => fetch(url + `/api/threads/${id}/send`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: JSON.stringify({ text: '发送测试', messageId }) });
     assert.equal((await send()).status, 200); assert.equal((await send()).status, 200); assert.equal(starts, 1);

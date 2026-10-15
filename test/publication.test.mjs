@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -58,6 +58,18 @@ test('PNG preview gate rejects metadata and unknown binary files', () => {
   assert.equal(safePng(Buffer.concat([good,Buffer.from('private')])),false);
   assert.equal(safePng(Buffer.concat([signature,chunk('IHDR',Buffer.alloc(13)),chunk('tEXt',Buffer.from('private')),chunk('IDAT',Buffer.from([1])),chunk('IEND',Buffer.alloc(0))])),false);
   assert.equal(safePng(Buffer.from('not a PNG')),false);
+});
+
+test('Git index privacy checks still apply when a Windows directory has an alternate path', { skip:process.platform !== 'win32' }, () => {
+  const base=mkdtempSync(join(tmpdir(),'publication-path-')), root=join(base,'repository'), alias=join(base,'alias');
+  mkdirSync(root);
+  try {
+    execFileSync('git',['init','--quiet'],{cwd:root,stdio:'pipe',windowsHide:true});
+    writeFileSync(join(root,'.env'),'PRIVATE=local');
+    execFileSync('git',['add','--force','.env'],{cwd:root,stdio:'pipe',windowsHide:true});
+    symlinkSync(root,alias,'junction');
+    assert.ok(scanProject(alias).findings.some(f=>f.file==='.env' && f.rule==='private-or-unlisted-file-in-index'));
+  } finally { rmSync(base,{recursive:true,force:true}); }
 });
 
 test('Tailscale direct IPv4 range requires explicit enable and never permits arbitrary public peers', () => {

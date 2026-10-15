@@ -1,4 +1,4 @@
-import { readFileSync, lstatSync, existsSync } from 'node:fs';
+import { readFileSync, lstatSync, existsSync, realpathSync } from 'node:fs';
 import { resolve, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -51,7 +51,17 @@ export function safePng(bytes) {
 
 function gitFiles(root) {
   const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: root, encoding: 'utf8', windowsHide: true });
-  if (top.status !== 0 || resolve(top.stdout.trim()).toLowerCase() !== resolve(root).toLowerCase()) return [];
+  if (top.status !== 0) {
+    if (existsSync(join(root, '.git'))) throw new Error('Cannot inspect publication Git repository');
+    return [];
+  }
+  // Windows runners can use a short (8.3) temp path while Git reports its long path.
+  // Compare filesystem identities rather than treating this as a non-repository.
+  const canonical = path => {
+    const value = realpathSync.native(resolve(path));
+    return process.platform === 'win32' ? value.toLowerCase() : value;
+  };
+  if (canonical(top.stdout.trim()) !== canonical(root)) return [];
   // Inspect the index even for ignored files or files deleted from the working tree.
   const result = spawnSync('git', ['ls-files', '--cached', '-z'], { cwd: root, encoding: 'utf8', windowsHide: true });
   if (result.status !== 0) throw new Error('Cannot inspect Git index');

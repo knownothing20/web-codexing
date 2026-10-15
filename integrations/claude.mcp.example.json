@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "remote-coding": {
+      "command": "node",
+      "args": ["C:/path/to/web-codexing/src/claude-channel.mjs"],
+      "env": { "REMOTE_CODING_CLAUDE_NAME": "Claude Code · 我的项目" }
+    }
+  }
+}

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f7f8f5"><meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg">
+  <link rel="stylesheet" href="/style.css?v=22"><title>Remote Coding</title>
+</head>
+<body>
+  <section id="pair-view" class="pair-view">
+    <div class="pair-card"><div class="brand-mark">⌘</div><span class="eyebrow">CODEX · LOCAL COMPANION</span>
+      <h1>电脑上的工作，<br>手机上接着聊。</h1><p>连接同一个 Wi-Fi，输入电脑控制面板上的配对码。</p>
+      <form id="pair-form"><label for="pair-code">六位配对码</label><input id="pair-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000" required>
+        <label class="remember-label"><input id="remember-phone" type="checkbox">记住这台手机 30 天<span>电脑程序重启后仍可连接</span></label>
+        <button class="primary" id="pair-submit" type="submit">连接电脑 <span>↗</span></button></form>
+      <div id="pair-error" class="error" role="alert"></div><div class="pair-foot"><span class="dot"></span> 会话留在电脑，手机只加载需要的内容</div>
+    </div><div class="version">REMOTE CODING <span>局域网原型 · 0.1</span></div>
+  </section>
+  <div id="workspace" class="workspace" hidden>
+    <button id="scrim" class="scrim" aria-label="关闭会话列表" hidden></button>
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand"><div class="brand-mark small">⌘</div><div>Remote Coding<small>你的 Codex，随身连接</small></div><button id="close-sidebar" class="icon-button mobile-only" aria-label="关闭列表">×</button></div>
+      <label class="provider-label" for="provider-select" hidden>软件</label><select id="provider-select" class="provider-select" aria-label="选择软件" hidden><option value="codex">Codex</option></select>
+      <section class="device-card account-card" aria-label="账号与额度"><div class="device-top"><span id="device-dot" class="dot"></span><div class="device-identity"><strong id="device-name">Windows 电脑</strong><small id="device-status">正在连接</small></div><small id="quota-plan" class="quota-plan"></small><button id="refresh-quota" class="icon-button" aria-label="刷新账号额度" title="刷新账号额度">↻</button></div><div id="quota-windows" class="quota-windows"><small>正在读取额度…</small></div><small id="quota-updated" class="quota-updated" hidden>当前电脑登录的 Codex 账号</small></section>
+      <div class="list-heading"><span>会话</span><button id="refresh-list" class="icon-button" title="刷新会话" aria-label="刷新会话">↻</button></div>
+      <label class="search-box"><span>⌕</span><input id="search" placeholder="搜索会话" aria-label="搜索会话"></label>
+      <nav id="threads" class="threads" aria-label="会话列表"></nav><button id="more-threads" class="text-button" hidden>加载更多会话</button>
+      <div class="sidebar-footer"><span><span class="dot muted"></span> 局域网直连</span><button id="logout" class="text-button">退出配对</button></div>
+    </aside>
+    <main class="main">
+      <header class="chat-header"><button id="open-sidebar" class="icon-button mobile-only" aria-label="打开会话列表">☰</button>
+        <div class="chat-title"><h2 id="thread-title">选择一个会话</h2><div><span id="connection-dot" class="dot muted"></span><span id="connection-label">从左侧选择电脑上的聊天</span></div></div>
+        <button id="reconnect" class="icon-button" title="重新连接当前会话" aria-label="重新连接当前会话">↻</button>
+      </header>
+      <div id="banner" class="banner" hidden></div>
+      <div id="offline-panel" class="offline-panel" hidden><strong id="offline-title">Codex 暂未连接</strong><span id="offline-description">历史仍可查看，草稿可以保留。连接恢复后再发送。</span><button id="open-desktop" hidden title="会切换电脑上的 Codex 窗口到这条会话">在电脑打开并连接</button><button id="retry-connection" class="text-button">重新连接</button></div>
+      <section id="integration-panel" class="integration-panel" hidden><span class="eyebrow">连接电脑端软件</span><h2 id="integration-title"></h2><p id="integration-description"></p><ol id="integration-steps" hidden></ol><p id="integration-note"></p><a id="integration-docs" target="_blank" rel="noopener noreferrer">查看官方连接说明 ↗</a><button id="refresh-provider" class="text-button">刷新连接状态</button></section>
+      <div id="message-scroll" class="message-scroll" tabindex="0" aria-label="聊天记录"><div class="conversation">
+        <button id="older" class="older" hidden>↑ 加载更早消息</button>
+        <div id="empty" class="empty"><div class="empty-glyph">⌘</div><h2>工作还在电脑上继续</h2><p>选择一个会话，就能查看进度、发送消息。<br>电脑端需要保持 Codex 打开。</p><span>本机同步 · 按需加载 · 无聊天本地存储</span></div>
+        <div id="messages" class="messages" aria-live="polite"></div>
+        <div id="activity" class="activity" hidden><span class="activity-dots">•••</span> Codex 正在执行</div>
+        <div id="requests" class="requests"></div>
+      </div></div>
+      <button id="jump-bottom" class="jump-bottom" aria-label="回到最新消息" hidden><span id="new-message-label" hidden>有新回复</span><span class="jump-arrow">↓</span></button>
+      <div class="composer-wrap"><div class="composer">
+        <div id="selected-context" class="selected-context" hidden></div>
+        <textarea id="draft" rows="1" placeholder="发消息给电脑上的 Codex…" aria-label="消息输入框" maxlength="8000" disabled></textarea>
+        <div class="context-actions"><button id="pick-thread" class="context-button" disabled>＋ 引用会话</button><button id="pick-skill" class="context-button" disabled>＋ Skill</button></div>
+        <div class="composer-actions"><button id="model-settings" class="model-button" aria-label="选择模型和思考档位" disabled><span id="model-label">桌面会话设置</span><span class="model-chevron">⌄</span></button><div><button id="stop" class="stop-button" hidden>■ 停止</button><button id="send" class="send-button" disabled aria-label="发送消息">↑</button></div></div>
+      </div><div class="composer-note"><span id="draft-note">消息会交给当前桌面会话执行</span><span id="char-count"></span></div></div>
+      <div id="toast" class="toast" role="status" hidden></div>
+    </main>
+  </div>
+  <div id="image-overlay" class="image-overlay" hidden role="dialog" aria-modal="true" aria-label="图片预览"><button id="close-image" class="image-close" aria-label="关闭图片预览">×</button><img id="full-image" alt=""><p id="image-caption"></p><button id="image-size" class="image-size">查看原图尺寸</button></div>
+  <div id="picker-overlay" class="settings-overlay" hidden>
+    <section class="settings-panel picker-panel" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+      <div class="settings-heading"><div><span class="eyebrow">ADD CONTEXT</span><h2 id="picker-title">引用会话</h2></div><button id="close-picker" class="icon-button" aria-label="关闭选择面板">×</button></div>
+      <p id="picker-intro" class="settings-intro"></p>
+      <label class="picker-search"><span>⌕</span><input id="picker-search" type="search" placeholder="搜索名称或描述" aria-label="搜索引用或 Skill"></label>
+      <div id="picker-results" class="picker-results"></div>
+      <div id="picker-error" class="error" role="alert"></div>
+      <button id="picker-more" class="text-button" hidden>加载更多</button>
+      <button id="picker-done" class="primary">完成选择 <span>✓</span></button>
+    </section>
+  </div>
+  <div id="settings-overlay" class="settings-overlay" hidden>
+    <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="settings-heading"><div><span class="eyebrow">CURRENT CONVERSATION</span><h2 id="settings-title">模型与思考档位</h2></div><button id="close-settings" class="icon-button" aria-label="关闭模型设置">×</button></div>
+      <p class="settings-intro">与电脑端的这条会话同步，保存后用于下一轮回复。</p>
+      <label for="model-select">模型</label><select id="model-select" disabled><option>正在读取模型目录…</option></select>
+      <p id="model-description" class="model-description"></p>
+      <label for="effort-select">思考档位</label><select id="effort-select" disabled></select>
+      <p class="effort-note">更高档位通常需要更多时间。当前正在执行的回复继续使用原设置。</p>
+      <div id="settings-error" class="error" role="alert"></div>
+      <button id="save-settings" class="primary" disabled>保存到当前会话 <span>↗</span></button>
+      <p class="settings-foot">模型列表来自本机 Codex。实际可用性以执行结果为准。</p>
+    </section>
+  </div>
+  <script src="/app.js?v=22" type="module"></script>
+</body></html>

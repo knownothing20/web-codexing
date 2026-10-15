@@ -1,0 +1,26 @@
+{
+  "name": "web-codexing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Control your computer's Codex desktop chats from a lightweight web UI over LAN or your own Tailscale network.",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/knownothing20/web-codexing.git" },
+  "bugs": { "url": "https://github.com/knownothing20/web-codexing/issues" },
+  "homepage": "https://github.com/knownothing20/web-codexing#readme",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "privacy:check": "node scripts/privacy-check.mjs",
+    "release:check": "npm run privacy:check && npm test",
+    "package:source": "node scripts/package-release.mjs",
+    "package:windows": "node scripts/package-release.mjs --windows",
+    "preview:demo": "node scripts/preview-demo.mjs"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
+}

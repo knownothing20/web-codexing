@@ -1,0 +1,104 @@
+import { DatabaseSync } from 'node:sqlite';
+import { existsSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
+import { join, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { messageFromItem, visibleUserText } from './state.mjs';
+
+export class Catalog {
+  constructor(home = process.env.CODEX_HOME || join(homedir(), '.codex')) {
+    this.home = resolve(home);
+    this.state = this.open('state_5.sqlite');
+    this.history = this.open('thread_history_1.sqlite');
+    const hasTurns = !!this.history?.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='thread_turns'").get();
+    const turnColumns = new Set(hasTurns ? this.history.prepare('PRAGMA table_info(thread_turns)').all().map(r=>r.name) : []);
+    this.turnStatus = hasTurns ? this.history.prepare(`SELECT status,rollout_ordinal,${turnColumns.has('completed_at')?'completed_at':'NULL'} AS completed_at,${turnColumns.has('turn_id')?'turn_id':'NULL'} AS turn_id FROM thread_turns WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1`) : null;
+    const columns = new Set(this.state?.prepare('PRAGMA table_info(threads)').all().map(r => r.name) || []);
+    // Native recency tracks chat activity; updated_at also changes on metadata reads/settings.
+    const candidates = ['recency_at_ms', 'recency_at', 'updated_at_ms', 'updated_at'].filter(name => columns.has(name));
+    this.recencySql = candidates.length ? 'COALESCE(' + candidates.map(name =>
+      `CASE WHEN ${name}>0 THEN CASE WHEN ${name}<100000000000 THEN ${name}*1000 ELSE ${name} END END`).join(',') + ',0)' : '0';
+  }
+  open(name) {
+    const path = join(this.home, name);
+    if (!existsSync(path)) return null;
+    const db = new DatabaseSync(path, { readOnly: true });
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000;');
+    return db;
+  }
+  list({ offset = 0, limit = 40, search = '' } = {}) {
+    if (!this.state) return [];
+    return this.state.prepare(`SELECT id, name, title, cwd, ${this.recencySql} AS list_recency, model FROM threads
+      WHERE archived=0 AND (agent_path IS NULL OR agent_path='')
+      AND source NOT LIKE '%subagent%' AND (name LIKE ? OR title LIKE ?)
+      ORDER BY list_recency DESC, id DESC LIMIT ? OFFSET ?`).all(`%${search}%`, `%${search}%`, limit, offset)
+      .map(r => { const turn=this.turnStatus?.get(r.id); return ({ id: r.id, title: (r.name || r.title || '未命名会话').split('\n')[0].slice(0, 100),
+        project: r.cwd?.replace(/^\\\\\?\\/, '').split(/[\\/]/).filter(Boolean).at(-1) || '本机',
+        updatedAt: r.list_recency, model: r.model || '',
+        status: ({inProgress:'running',completed:'idle',failed:'error',interrupted:'stopped'})[turn?.status] || 'unknown',
+        completionKey: turn?.status==='completed' ? turn.turn_id || 'record:'+turn.rollout_ordinal : null,
+        completedAt: turn?.status==='completed' && Number(turn.completed_at)>0 ? Number(turn.completed_at)*(Number(turn.completed_at)<100000000000?1000:1) : null }); });
+  }
+  get(id) {
+    return this.state?.prepare('SELECT id, rollout_path, name, title, cwd FROM threads WHERE id=? AND archived=0').get(id);
+  }
+  historyPage(id, before = null, limit = 60) {
+    const row = this.get(id);
+    if (!row) throw new Error('会话不存在或已归档');
+    const items = this.history?.prepare(`SELECT item_id,turn_id,rollout_ordinal,item_json,created_at_ms FROM thread_items
+      WHERE thread_id=? AND rollout_ordinal<? AND item_type IN ('userMessage','agentMessage','steeringUserMessage')
+      ORDER BY rollout_ordinal DESC LIMIT ?`).all(id, before ?? Number.MAX_SAFE_INTEGER, limit + 1) || [];
+    if (!items.length) {
+      if (this.history?.prepare('SELECT 1 FROM thread_items WHERE thread_id=? LIMIT 1').get(id)) return { messages: [], cursor: null };
+      return this.legacyPage(row, before, limit);
+    }
+    const hasMore = items.length > limit;
+    const page = items.slice(0, limit).reverse();
+    return { messages: page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length),
+      cursor: hasMore ? page[0].rollout_ordinal : null };
+  }
+  legacyPage(row, before, limit) {
+    // Bound disk work on old JSONL histories. Never read arbitrary paths from the client.
+    const path = resolve(row.rollout_path);
+    const allowed = ['sessions', 'archived_sessions'].some(dir => path.toLowerCase().startsWith((join(this.home, dir) + sep).toLowerCase()));
+    if (!allowed) return { messages: [], cursor: null };
+    let fd;
+    try {
+      fd = openSync(path, 'r');
+      const end = before ?? Number.MAX_SAFE_INTEGER;
+      // A fixed tail prevents long sessions from loading into phone memory at once.
+      const { size } = fstatSync(fd);
+      const stop = Math.min(end, size);
+      const start = Math.max(0, stop - 2 * 1024 * 1024);
+      const buffer = Buffer.alloc(stop - start);
+      readSync(fd, buffer, 0, buffer.length, start);
+      let lines = buffer.toString('utf8').split('\n');
+      if (start) lines.shift();
+      const found = [];
+      let pos = start + (start ? buffer.indexOf(10) + 1 : 0);
+      for (const line of lines) {
+        const linePos = pos;
+        pos += Buffer.byteLength(line) + 1;
+        try {
+          const e = JSON.parse(line);
+          if (e.type !== 'response_item' || e.payload?.type !== 'message') continue;
+          const p = e.payload;
+          if (!['user', 'assistant'].includes(p.role)) continue;
+          const raw = (p.content || []).filter(c => ['input_text', 'output_text'].includes(c.type)).map(c => c.text).join('\n');
+          const text = p.role === 'user' ? visibleUserText(raw) : raw;
+          if (text.startsWith('# AGENTS.md instructions') || text.startsWith('<environment_context>') || !text) continue;
+          found.push({ id: p.id || `legacy:${linePos}`, text, role: p.role, kind: 'message', phase: p.phase,
+            at: e.timestamp ? Date.parse(e.timestamp) : null, timeSource: 'recorded', _pos: linePos });
+        } catch { /* incomplete tail or non-message */ }
+      }
+      const page = found.slice(-limit);
+      return { messages: page.map(({ _pos, ...m }) => m), cursor: found.length > limit ? page[0]._pos : start || null };
+    } catch { return { messages: [], cursor: null }; }
+    finally { if (fd !== undefined) closeSync(fd); }
+  }
+  messageTimes(id, ids) {
+    if (!this.history || !ids.length) return new Map();
+    const rows = this.history.prepare(`SELECT item_id,created_at_ms FROM thread_items WHERE thread_id=? AND item_id IN (${ids.map(() => '?').join(',')})`).all(id, ...ids);
+    return new Map(rows.filter(r => r.created_at_ms > 0).map(r => [r.item_id, r.created_at_ms]));
+  }
+  close() { this.state?.close(); this.history?.close(); }
+}

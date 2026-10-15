@@ -10,19 +10,26 @@ import { FrameReader, frame } from '../src/ipc.mjs';
 
 const base = resolve('.local'); mkdirSync(base, { recursive: true });
 const fixture = mkdtempSync(join(base, 'ui-test-')), id = randomUUID(), pipe = '\\\\.\\pipe\\remote-coding-ui-' + randomUUID();
+const statusMode=process.argv.includes('--status'),otherId=randomUUID();
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
 db.exec('CREATE TABLE threads (id TEXT PRIMARY KEY,name TEXT,title TEXT,cwd TEXT,updated_at INTEGER,model TEXT,archived INTEGER,agent_path TEXT,source TEXT,rollout_path TEXT)');
-db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, '手机问答验收 · 隔离测试', '手机问答验收 · 隔离测试', resolve('.'), Math.floor(Date.now()/1000), 'test', 0, null, 'vscode', ''); db.close();
+db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, '手机问答验收 · 隔离测试', '手机问答验收 · 隔离测试', resolve('.'), Math.floor(Date.now()/1000), 'test', 0, null, 'vscode', '');
+if(statusMode)db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(otherId,'另一个会话 · 隔离测试','另一个会话 · 隔离测试',resolve('.'),Math.floor(Date.now()/1000)+5,'test',0,null,'vscode','');
+db.close();
 const history = new DatabaseSync(join(fixture, 'thread_history_1.sqlite'));
 history.exec('CREATE TABLE thread_items (thread_id TEXT,turn_id TEXT,rollout_ordinal INTEGER,item_id TEXT,item_type TEXT,item_json TEXT,created_at_ms INTEGER)');
 history.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id, 'turn', 1, 'u', 'userMessage', JSON.stringify({ id:'u', type:'userMessage', content:[{type:'text',text:'这是隔离验收会话，不会运行真实任务。'}] }), Date.now()); history.close();
+if(statusMode){const d=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));d.exec('CREATE TABLE thread_turns(thread_id TEXT,turn_id TEXT,rollout_ordinal INTEGER,status TEXT)');d.prepare('INSERT INTO thread_turns VALUES(?,?,?,?)').run(id,'turn',1,'interrupted');d.prepare('INSERT INTO thread_turns VALUES(?,?,?,?)').run(otherId,'other-turn',1,'completed');d.close();}
 const state = { id, title: '手机问答验收 · 隔离测试', latestModel: 'test', threadRuntimeStatus: {type:'active'},
   requests: [{id:'form',method:'item/tool/requestUserInput',params:{questions:[
     {id:'choice',header:'阅读偏好',question:'选择进度的显示方式',isOther:true,isSecret:false,options:[{label:'全部展开',description:'直接阅读所有进度'},{label:'默认折叠',description:'需要时再展开'}]},
     {id:'text',header:'备注',question:'填写一条备注',isOther:true,isSecret:false,options:null},
   ]}}], turns:[{turnId:'turn',turnStartedAtMs:Date.now(),status:'inProgress',items:[{id:'u',type:'userMessage',content:[{type:'text',text:'请测试选择和填写表单。'}]}, {id:'a',type:'agentMessage',phase:'commentary',text:'请选择一个选项并填写备注；测试只回传答案。'}]}] };
 const sockets = new Set(); let revision = 1, online = true;
-const broadcast = socket => socket.write(frame({type:'broadcast',method:'thread-stream-state-changed',version:11,sourceClientId:'fixture-owner',params:{conversationId:id,hostId:'local',change:{type:'snapshot',revision:revision++,conversationState:state}}}));
+const otherState={id:otherId,title:'另一个会话 · 隔离测试',threadRuntimeStatus:{type:'idle'},requests:[],turns:[{turnId:'other-turn',status:'completed',items:[{id:'other-message',type:'agentMessage',text:'这是一条独立的演示会话，用来验证未打开会话的列表状态。'}]}]};
+const requestTemplate=structuredClone(state.requests);
+if(statusMode){state.threadRuntimeStatus={type:'idle'};state.turns[0].status='interrupted';}
+const broadcast = (socket,conversationId=id) => socket.write(frame({type:'broadcast',method:'thread-stream-state-changed',version:11,sourceClientId:'fixture-owner',params:{conversationId,hostId:'local',change:{type:'snapshot',revision:revision++,conversationState:conversationId===otherId?otherState:state}}}));
 const fake = net.createServer(socket => {
   if (!online) {socket.destroy();return;} sockets.add(socket); socket.on('close',()=>sockets.delete(socket));
   const reader = new FrameReader(message=>{
@@ -31,6 +38,7 @@ const fake = net.createServer(socket => {
       if(message.method==='thread-follower-submit-user-input') {
         writeFileSync(join(fixture,'receipt.json'),JSON.stringify(message.params.response));
         state.requests=[]; state.threadRuntimeStatus={type:'idle'}; state.turns[0].status='completed';
+        if(statusMode){const d=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));d.prepare('UPDATE thread_turns SET status=? WHERE thread_id=?').run('completed',id);d.close();}
         state.turns[0].items.push({id:'receipt',type:'agentMessage',phase:'final_answer',text:'已收到答案：'+Object.values(message.params.response.answers).flatMap(a=>a.answers).join(' · ')});
         setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
       }
@@ -48,7 +56,7 @@ const fake = net.createServer(socket => {
         setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
       }
       socket.write(frame({type:'response',requestId:message.requestId,method:message.method,handledByClientId:'fixture-owner',resultType:'success',result}));
-    } else if(message.method==='thread-stream-following-changed' && message.params.following)broadcast(socket);
+    } else if(message.method==='thread-stream-following-changed' && message.params.following)broadcast(socket,message.params.conversationId);
   }); socket.on('data',data=>reader.push(data));
 });
 await new Promise(resolve=>fake.listen(pipe,resolve));
@@ -77,6 +85,11 @@ const command = line => {
     for(const s of sockets)broadcast(s);
   }
   if(line.trim()==='quit')stop();
+  if(line.trim()==='stop-question'){
+    state.requests=structuredClone(requestTemplate);state.requests[0].id=randomUUID();state.threadRuntimeStatus={type:'idle'};state.turns[0].status='interrupted';
+    if(statusMode){const d=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));d.prepare('UPDATE thread_turns SET status=? WHERE thread_id=?').run('interrupted',id);d.close();}
+    for(const s of sockets)broadcast(s);
+  }
 };
 const rl=createInterface({input:process.stdin});rl.on('line',command);
 setInterval(()=>{const path=join(fixture,'control.txt');if(existsSync(path)){const line=readFileSync(path,'utf8');rmSync(path);command(line);}},300);

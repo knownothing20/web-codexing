@@ -20,7 +20,7 @@ export function createReadTracker(storage, now = Date.now()) {
       if (observed.size > 1000) observed.delete(observed.keys().next().value);
       if (status !== 'idle' || !completionKey) return false;
       if (seen.get(id) === completionKey) return false;
-      const changed = previous && (['running','waiting'].includes(previous.status) || previous.completionKey && previous.completionKey !== completionKey || previous.unread && previous.completionKey === completionKey);
+      const changed = previous && (previous.status==='running' || previous.status==='waiting'&&!previous.completionKey || previous.completionKey && previous.completionKey !== completionKey || previous.unread && previous.completionKey === completionKey);
       const newByTime = Number.isFinite(completedAt) && completedAt > since;
       if (!changed && !newByTime) { markRead(id,completionKey); return false; }
       observed.set(id, { status, completionKey, unread:true }); return true;

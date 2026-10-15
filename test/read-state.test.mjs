@@ -26,3 +26,8 @@ test('live task transition detects completion even when old protocol has no comp
   assert.equal(tracker.observe('chat',{status:'idle',completionKey:'finished'}),true);
   tracker.markRead('chat','finished'); assert.equal(tracker.observe('chat',{status:'idle',completionKey:'finished'}),false);
 });
+test('answering an old pending question does not manufacture a new unread completion',()=>{
+  const tracker=createReadTracker(store(),1000);
+  tracker.observe('old',{status:'waiting',completionKey:'old-result',completedAt:500});
+  assert.equal(tracker.observe('old',{status:'idle',completionKey:'old-result',completedAt:500}),false);
+});

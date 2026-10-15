@@ -72,6 +72,11 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     assert.equal((await fetch(url + '/api/quota')).status, 401);
     assert.equal((await fetch(url + '/api/quota', { headers: { Cookie: cookie } })).status, 503);
     assert.equal(status.features.openDesktop, false);
+    assert.equal((await fetch(url+'/api/thread-statuses',{method:'POST',headers:{Cookie:cookie},body:JSON.stringify({ids:[id]})})).status,403);
+    const statusHeaders={Cookie:cookie,'X-CSRF-Token':status.csrf};
+    assert.equal((await fetch(url+'/api/thread-statuses',{method:'POST',headers:statusHeaders,body:JSON.stringify({ids:Array(121).fill(id)})})).status,400);
+    const statusBatch=await (await fetch(url+'/api/thread-statuses',{method:'POST',headers:statusHeaders,body:JSON.stringify({ids:[id]})})).json();
+    assert.equal(statusBatch.threads[0].id,id);assert.equal(Object.hasOwn(statusBatch.threads[0],'stamp'),false);
     response = await fetch(url + `/api/threads/${id}/open-desktop`, { method: 'POST', headers: { Cookie: cookie }, body: '{}' }); assert.equal(response.status, 403);
     response = await fetch(url + `/api/threads/${id}/open-desktop`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: '{}' }); assert.equal(response.status, 409);
     response = await fetch(url + `/api/threads/${id}/send`, { method: 'POST', headers: { Cookie: cookie }, body: '{}' }); assert.equal(response.status, 403);
@@ -80,6 +85,8 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     response = await fetch(url + `/api/threads/${id}/events`, { headers: { Cookie: cookie }, signal: eventController.signal });
     const reader = response.body.getReader(); let text = '';
     while (!text.includes('snapshot')) { const chunk = await reader.read(); text += new TextDecoder().decode(chunk.value); }
+    const liveStatus=await (await fetch(url+'/api/thread-statuses',{method:'POST',headers:statusHeaders,body:JSON.stringify({ids:[id]})})).json();
+    assert.equal(liveStatus.threads[0].status,'waiting');
     assert.match(text, /真实协议测试/);
     const input = () => fetch(url + `/api/threads/${id}/input`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: JSON.stringify({ requestId: 'question', answers: { choice: '选项一' } }) });
     assert.equal((await input()).status, 200); assert.equal((await input()).status, 200); assert.equal(answered, 1);

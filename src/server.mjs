@@ -16,6 +16,7 @@ import { ClaudeChannels, WorkBuddy } from './providers.mjs';
 import { DesktopOpener } from './desktop-open.mjs';
 import { getQuota } from './quota.mjs';
 import { allowedAddress } from './network.mjs';
+import { ListStatus } from './list-status.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimeDir = process.env.REMOTE_CODING_RUNTIME_DIR || join(root, '.local');
@@ -24,6 +25,7 @@ const catalog = new Catalog();
 const ipc = new DesktopIpc({ pipe: process.env.REMOTE_CODING_IPC_PIPE || '\\\\.\\pipe\\codex-ipc' });
 const images = new ImageStore();
 const bridge = new Bridge(ipc, catalog, images);
+const listStatus = new ListStatus(bridge,catalog);
 const desktopOpener = new DesktopOpener({ enabled: process.platform === 'win32' && process.env.REMOTE_CODING_DISABLE_DESKTOP_OPEN !== '1' });
 const claude = new ClaudeChannels(), workbuddy = new WorkBuddy();
 const integrationsEnabled = process.env.REMOTE_CODING_EXPERIMENTAL_INTEGRATIONS === '1';
@@ -183,12 +185,14 @@ async function handler(req, res) {
   if (req.method === 'GET' && path === '/api/threads') {
     const offset = Math.max(0, Math.min(10000, Number(url.searchParams.get('offset')) || 0));
     const threads = catalog.list({ offset, search: (url.searchParams.get('q') || '').slice(0, 80) });
-    await Promise.all(threads.map(async thread=>{
-      thread.status=await bridge.listStatus(thread.id,thread.status);
-      const live=bridge.threads.get(thread.id);
-      if(live?.owner&&live.state) thread.completionKey=bridge.completionKey(thread.id);
-    }));
+    const statuses=new Map(listStatus.read(threads.map(t=>t.id)).map(t=>[t.id,t]));
+    for(const thread of threads)Object.assign(thread,statuses.get(thread.id));
     return json(res, 200, { threads, next: threads.length === 40 ? offset + 40 : null });
+  }
+  if(req.method==='POST' && path==='/api/thread-statuses') {
+    const data=await body(req);
+    if(!Array.isArray(data.ids)||data.ids.length>120||data.ids.some(id=>typeof id!=='string'||!/^[0-9a-f-]{36}$/.test(id)))return json(res,400,{error:'最多查询 120 条会话状态'});
+    return json(res,200,{threads:listStatus.read(data.ids)});
   }
   if (req.method === 'GET' && path === '/api/models') return json(res, 200, await getModels());
   if (req.method === 'GET' && path === '/api/providers') return json(res, 200, { providers: [
@@ -372,7 +376,7 @@ let exiting = false;
 function shutdown() {
   if (exiting) return; exiting = true;
   for (const stream of streams) stream.close();
-  bridge.close(); catalog.close();
+  listStatus.close(); bridge.close(); catalog.close();
   const path = join(runtimeDir, 'runtime.json');
   try { if (JSON.parse(readFileSync(path, 'utf8')).pid === process.pid) unlinkSync(path); } catch {}
   server.close(() => process.exit(0));

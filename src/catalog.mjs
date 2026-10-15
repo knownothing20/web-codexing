@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
-import { messageFromItem, visibleUserText } from './state.mjs';
+import { messageFromItem, visibleUserText, asyncQuestions } from './state.mjs';
 
 export class Catalog {
   constructor(home = process.env.CODEX_HOME || join(homedir(), '.codex')) {
@@ -17,6 +17,23 @@ export class Catalog {
     const candidates = ['recency_at_ms', 'recency_at', 'updated_at_ms', 'updated_at'].filter(name => columns.has(name));
     this.recencySql = candidates.length ? 'COALESCE(' + candidates.map(name =>
       `CASE WHEN ${name}>0 THEN CASE WHEN ${name}<100000000000 THEN ${name}*1000 ELSE ${name} END END`).join(',') + ',0)' : '0';
+    this.statusRow = this.state?.prepare(`SELECT id,${this.recencySql} AS updatedAt FROM threads WHERE id=? AND archived=0`);
+    this.pendingCache = new Map();
+    const itemColumns = new Set(this.history?.prepare('PRAGMA table_info(thread_items)').all().map(r=>r.name) || []);
+    this.lastItem = itemColumns.has('rollout_ordinal') ? this.history.prepare('SELECT rollout_ordinal FROM thread_items WHERE thread_id=? ORDER BY rollout_ordinal DESC LIMIT 1') : null;
+    this.lastUpdate = itemColumns.has('updated_at_ordinal') ? this.history.prepare('SELECT updated_at_ordinal FROM thread_items WHERE thread_id=? ORDER BY updated_at_ordinal DESC LIMIT 1') : null;
+    // Read at most 120 recent display items. Return only question counts and actual
+    // question-reply wrappers; ordinary text, tool output and pictures stay on disk.
+    this.questionRows = itemColumns.has('item_json') ? this.history.prepare(`WITH recent AS (
+      SELECT item_id,turn_id,item_type,item_json,rollout_ordinal FROM thread_items WHERE thread_id=?
+      AND item_type IN ('userMessage','steeringUserMessage','agentMessage') ORDER BY rollout_ordinal DESC LIMIT 120
+    ) SELECT item_id,turn_id,item_type,rollout_ordinal,
+      CASE WHEN item_type='agentMessage' THEN json_array_length(item_json,'$.questions') END AS questions,
+      CASE WHEN item_type!='agentMessage' THEN item_json END AS reply
+      FROM recent WHERE json_valid(item_json) AND
+      ((item_type='agentMessage' AND json_array_length(item_json,'$.questions')>0)
+      OR (item_type!='agentMessage' AND instr(item_json,'<send_user_message_question_reply>')>0))
+      ORDER BY rollout_ordinal`) : null;
   }
   open(name) {
     const path = join(this.home, name);
@@ -40,6 +57,34 @@ export class Catalog {
   }
   get(id) {
     return this.state?.prepare('SELECT id, rollout_path, name, title, cwd FROM threads WHERE id=? AND archived=0').get(id);
+  }
+  statusRecords(ids) {
+    const version = this.history?.prepare('PRAGMA data_version').get()?.data_version || 0;
+    return ids.flatMap(id => {
+      const row=this.statusRow?.get(id); if(!row)return [];
+      const turn=this.turnStatus?.get(id);
+      const status=({inProgress:'running',completed:'idle',failed:'error',interrupted:'stopped'})[turn?.status] || 'unknown';
+      const last=this.lastItem?.get(id)?.rollout_ordinal || 0, updated=this.lastUpdate?.get(id)?.updated_at_ordinal || 0;
+      const stamp=[turn?.turn_id,turn?.rollout_ordinal,turn?.status,last,updated].join(':');
+      let cached=this.pendingCache.get(id);
+      if(!cached || cached.version!==version || cached.stamp!==stamp) {
+        if(cached?.stamp===stamp) cached.version=version;
+        else {
+          const turns=new Map();
+          for(const item of this.questionRows?.all(id) || []) {
+            if(!turns.has(item.turn_id))turns.set(item.turn_id,{turnId:item.turn_id,status:'completed',items:[]});
+            if(item.questions)turns.get(item.turn_id).items.push({type:'agentMessage',id:item.item_id,questions:Array.from({length:Math.min(20,item.questions)},()=>({title:''}))});
+            else if(item.reply) {try{turns.get(item.turn_id).items.push(JSON.parse(item.reply));}catch{}}
+          }
+          cached={version,stamp,pendingIds:asyncQuestions({turns:[...turns.values()]}).map(r=>r.id)};
+          this.pendingCache.delete(id);this.pendingCache.set(id,cached);
+          if(this.pendingCache.size>200)this.pendingCache.delete(this.pendingCache.keys().next().value);
+        }
+      }
+      return [{...row,status,stamp,pendingIds:cached.pendingIds,
+        completionKey:turn?.status==='completed' ? turn.turn_id || 'record:'+turn.rollout_ordinal : null,
+        completedAt:turn?.status==='completed' && Number(turn.completed_at)>0 ? Number(turn.completed_at)*(Number(turn.completed_at)<100000000000?1000:1) : null}];
+    });
   }
   historyPage(id, before = null, limit = 60) {
     const row = this.get(id);

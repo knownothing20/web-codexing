@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { applyPatches, orderedTurns, publicConversation } from './state.mjs';
+import { applyPatches, orderedTurns, publicConversation, conversationStatus, asyncQuestions } from './state.mjs';
 
 export class Bridge extends EventEmitter {
   constructor(ipc, catalog, images = null, { retryMs = 5000 } = {}) {
@@ -11,10 +11,13 @@ export class Bridge extends EventEmitter {
     this.retryMs = retryMs;
     this.inputSubmissions = new Map();
     this.statusOwners = new Map();
+    this.acceptedRequests = new Set();
+    this.statusProbes = new Map();
     this.threads = new Map();
     ipc.on('broadcast', m => this.onBroadcast(m));
     ipc.on('disconnected', () => {
       this.statusOwners.clear();
+      for(const probe of this.statusProbes.values())probe.finish(null);
       for (const t of this.threads.values()) {
         clearTimeout(t.retryTimer);
         t.owner = null; t.state = null; t.revision = null;
@@ -99,6 +102,10 @@ export class Bridge extends EventEmitter {
     }
     if (message.method !== 'thread-stream-state-changed' || message.version !== 11) return;
     const params = message.params;
+    const probe=this.statusProbes.get(params.conversationId);
+    if(probe && params.hostId==='local' && probe.owner===message.sourceClientId && params.change?.type==='snapshot') {
+      probe.finish(this.statusOf(params.conversationId,params.change.conversationState));
+    }
     const t = this.threads.get(params.conversationId);
     if (!t || params.hostId !== t.hostId || !t.listeners.size) return;
     const change = params.change;
@@ -131,11 +138,15 @@ export class Bridge extends EventEmitter {
     const changed = snapshot ? messages : messages.filter(m => t.lastMessages.get(m.id) !== next.get(m.id));
     const removed = [...t.lastMessages.keys()].filter(id => !next.has(id));
     t.lastMessages = next;
+    this.emit('thread-status',{id:t.id,status:meta.status,pendingCount:meta.requests.length,
+      requestIds:meta.requests.map(r=>r.id),resumeStatus:conversationStatus(t.state,[]),completionKey:meta.completionKey});
     t.notify({ type: snapshot ? 'snapshot' : 'update', ...meta, messages: changed, removed,
       order: messages.map(m => m.id), writable: !!t.owner });
   }
   view(t) {
     const view = publicConversation(t.state);
+    view.requests=view.requests.filter(r=>!this.acceptedRequests.has(t.id+':'+r.id));
+    view.status=conversationStatus(t.state,view.requests);
     const missing = view.messages.filter(m => !t.timeCache.has(m.id)).map(m => m.id);
     for (const [id, at] of this.catalog.messageTimes(t.id, missing)) t.timeCache.set(id, at);
     view.messages = view.messages.map(m => {
@@ -153,8 +164,7 @@ export class Bridge extends EventEmitter {
   async listStatus(id, recorded = 'unknown') {
     const t = this.threads.get(id);
     if (this.ipc.clientId && t?.owner && t.state) {
-      const view = publicConversation(t.state);
-      return view.busy ? view.requests.some(r=>!r.historical) ? 'waiting' : 'running' : recorded === 'error' || recorded === 'stopped' ? recorded : 'idle';
+      return this.statusOf(id,t.state).status;
     }
     if (recorded !== 'running') return recorded;
     if (!this.ipc.clientId) return 'offline';
@@ -165,6 +175,44 @@ export class Bridge extends EventEmitter {
       if (this.statusOwners.size>200) this.statusOwners.delete(this.statusOwners.keys().next().value);
     }
     return await cached.result ? 'running' : 'notLoaded';
+  }
+  statusOf(id,state) {
+    const requests=[...(state.requests || []).filter(r=>!r.completed),...asyncQuestions(state)]
+      .filter(r=>!this.acceptedRequests.has(id+':'+r.id));
+    const latest=orderedTurns(state).at(-1);
+    return {id,status:conversationStatus(state,requests),pendingCount:requests.length,
+      requestIds:requests.map(r=>r.id),resumeStatus:conversationStatus(state,[]),
+      completionKey:state.threadRuntimeStatus?.type!=='active' && latest?.status==='completed' ? latest.turnId || latest.id || null : null};
+  }
+  acknowledge(id,requestId) {
+    this.acceptedRequests.add(id+':'+requestId);
+    while(this.acceptedRequests.size>256)this.acceptedRequests.delete(this.acceptedRequests.values().next().value);
+    this.emit('status-invalidated',id);
+    const t=this.threads.get(id);
+    if(t?.listeners?.size && t.notify)this.publish(t);
+  }
+  // One snapshot, no inference, no history projection, no persistent subscription.
+  // The list service bounds calls to two concurrent probes / four per 5 seconds.
+  probeStatus(id) {
+    if(this.statusProbes.has(id))return this.statusProbes.get(id).promise;
+    if(!this.ipc.clientId)return Promise.resolve(null);
+    const current=this.threads.get(id);if(current?.owner&&current.state)return Promise.resolve(this.statusOf(id,current.state));
+    let done=false,resolveResult;
+    const promise=new Promise(resolve=>{resolveResult=resolve;});
+    const probe={promise,owner:null,finish:value=>{
+      if(done)return;done=true;clearTimeout(probe.timer);this.statusProbes.delete(id);
+      if(probe.owner && !this.threads.get(id)?.listeners?.size) {try{this.ipc.follow(id,'local',false,probe.owner);}catch{}}
+      resolveResult(value);
+    }};
+    this.statusProbes.set(id,probe);
+    probe.timer=setTimeout(()=>probe.finish(null),2500);probe.timer.unref?.();
+    this.ipc.request('thread-owner-discovery',{conversationId:id,hostId:'local'},{timeoutMs:1200}).then(reply=>{
+      if(done)return;
+      probe.owner=reply.handledByClientId;
+      if(!probe.owner)return probe.finish(null);
+      this.ipc.follow(id,'local',true,probe.owner);
+    }).catch(()=>probe.finish(null));
+    return promise;
   }
   completionKey(id) {
     const latest=orderedTurns(this.threads.get(id)?.state).at(-1);
@@ -230,6 +278,7 @@ export class Bridge extends EventEmitter {
     if (!['accept', 'decline'].includes(decision)) throw new Error('无效审批决定');
     const response = await this.ipc.request(method, { conversationId: id, requestId, decision },
       { targetClientId: t.owner, hostId: t.hostId, timeoutMs: 12000 });
+    this.acknowledge(id,requestId);
     return response.result;
   }
   async answer(id, requestId, answers) {
@@ -271,6 +320,7 @@ export class Bridge extends EventEmitter {
           },
         }, { targetClientId: t.owner, hostId: t.hostId, timeoutMs: 30000 });
       }
+      this.acknowledge(id,requestId);
       return { accepted: true, result: result.result };
     })();
     // Unknown outcomes are retained rather than silently submitting twice.
@@ -278,6 +328,7 @@ export class Bridge extends EventEmitter {
     return operation;
   }
   close() {
+    for(const probe of this.statusProbes.values())probe.finish(null);
     for (const t of this.threads.values()) { clearTimeout(t.releaseTimer); clearTimeout(t.flushTimer); clearTimeout(t.retryTimer); }
     this.ipc.close();
   }

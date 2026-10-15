@@ -1,4 +1,4 @@
-import { createReadTracker } from './read-state.js?v=22';
+import { createReadTracker } from './read-state.js?v=23';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -6,6 +6,8 @@ let historyCursor = null, threadNext = null, listQuery = '', listGeneration = 0,
 const drafts = new Map(), messageMap = new Map(), messageNodes = new Map();
 const contexts = new Map(), inputDrafts = new Map(), inputStates = new Map();
 const threadCompletion = new Map();
+const threadStatuses = new Map(), liveStatusAt = new Map();
+let statusRefreshing=false,lastListRead=0;
 let displayedCompletionKey = null;
 let browserStorage;
 try { browserStorage=localStorage; } catch { browserStorage={getItem:()=>null,setItem:()=>{}}; }
@@ -13,7 +15,8 @@ const readTracker=createReadTracker(browserStorage);
 function markCurrentCompletionRead() {
   if (!currentId || !displayedCompletionKey || document.hidden || $('sidebar').classList.contains('open') || !isAtBottom()) return;
   readTracker.markRead(currentId,displayedCompletionKey);
-  paintThreadStatus(currentId,'idle',displayedCompletionKey);
+  const actual=threadStatuses.get(currentId);
+  paintThreadStatus(currentId,actual?.status || 'idle',displayedCompletionKey,actual?.completedAt);
 }
 let selectedSkills = [], selectedThreads = [], pickerMode = 'skills', pickerItems = [], pickerNext = null, pickerGeneration = 0, requestSignature = '';
 let requestsNow = [], imageReturnFocus;
@@ -160,8 +163,8 @@ function updateComposer() {
   $('send').textContent = steering ? '引导' : '↑'; $('send').classList.toggle('steer',steering);
   $('send').setAttribute('aria-label',steering ? '发送引导消息' : '发送消息');
   $('send').title = steering ? '把这句话追加到当前任务，不停止执行' : '发送消息';
-  $('stop').hidden = !writable || !busy; $('activity').hidden = !busy;
-  $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : busy ? '正在执行 · 可随时补充一句引导' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
+  $('stop').hidden = !writable || !busy; $('activity').hidden = !busy || requestsNow.length>0;
+  $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : writable&&requestsNow.length ? '待操作 · 请处理会话里的问题或审批' : busy ? '正在执行 · 可随时补充一句引导' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
   $('char-count').textContent = $('draft').value.length > 5000 ? `${$('draft').value.length}/8000` : '';
   $('model-settings').disabled = !writable || activeProvider !== 'codex';
   $('pick-thread').disabled = !currentId || sending || activeProvider !== 'codex';
@@ -562,11 +565,13 @@ function closePicker() { ++pickerGeneration; $('picker-overlay').hidden = true; 
 
 async function loadThreads(append = false) {
   const generation = ++listGeneration;
+  const started=Date.now();
   const listScrollTop = $('threads').scrollTop;
   $('refresh-list').disabled = true;
   try {
     const data = await api(`${activeProvider === 'codex' ? '/api/threads' : '/api/providers/' + activeProvider + '/threads'}?offset=${append ? threadNext || 0 : 0}&q=${encodeURIComponent(listQuery)}`);
     if (generation !== listGeneration) return;
+    lastListRead=Date.now();
     if (!append) $('threads').replaceChildren();
     for (const thread of data.threads) {
       const button = document.createElement('button'); button.className = 'thread-row' + (thread.id === currentId ? ' selected' : ''); button.dataset.id = thread.id;
@@ -578,7 +583,8 @@ async function loadThreads(append = false) {
       time.title = '最近活动：' + date.toLocaleString('zh-CN', {hour12:false});
       const heading=document.createElement('div');heading.className='thread-row-heading';heading.append(title);
       meta.append(project, time); button.append(heading, meta); button.onclick = () => openThread(thread.id, thread.title); $('threads').append(button);
-      paintThreadStatus(thread.id,thread.status,thread.completionKey,thread.completedAt);
+      const recent=liveStatusAt.get(thread.id)>=started ? threadStatuses.get(thread.id) : thread;
+      paintThreadStatus(thread.id,recent.status,recent.completionKey,recent.completedAt);
     }
     threadNext = data.next; $('more-threads').hidden = threadNext === null;
     $('threads').scrollTop = listScrollTop;
@@ -592,16 +598,31 @@ async function loadThreads(append = false) {
   finally { if (generation === listGeneration) $('refresh-list').disabled = false; }
 }
 function paintThreadStatus(id,status,completionKey,completedAt) {
+  threadStatuses.set(id,{status,completionKey,completedAt});
+  if(threadStatuses.size>500)threadStatuses.delete(threadStatuses.keys().next().value);
   if(completionKey!==undefined) threadCompletion.set(id,completionKey);
   const unread=readTracker.observe(id,{status,completionKey:threadCompletion.get(id),completedAt});
   if(unread)status='unread';
   const row=[...$('threads').children].find(el=>el.dataset.id===id);if(!row)return;
-  const names={running:['●','进行中'],waiting:['◐','待处理'],unread:['●','已完成'],error:['!','出错'],stopped:['■','已停止'],offline:['○','离线'],notLoaded:['○','未加载']};
+  const names={running:['●','进行中'],waiting:['◐','待操作'],unread:['●','已完成'],error:['!','出错'],stopped:['■','已停止'],offline:['○','离线'],notLoaded:['○','未加载']};
   let icon=row.querySelector('.thread-status');
   if(!names[status]){icon?.remove();return;}
   if(!icon){icon=document.createElement('span');row.querySelector('.thread-row-heading').append(icon);}
   icon.className='thread-status '+status;icon.title=status==='unread'?'已完成，手机尚未查看':names[status][1];icon.setAttribute('aria-label',icon.title);
   icon.textContent=names[status][0]+(['running','waiting','unread','stopped'].includes(status)?' '+names[status][1]:'');
+}
+function listIsVisible(){return !$('workspace').hidden&&!document.hidden&&($('sidebar').classList.contains('open')||window.matchMedia('(min-width: 721px)').matches);}
+async function refreshThreadStatuses() {
+  if(!csrf||activeProvider!=='codex'||statusRefreshing||!listIsVisible())return;
+  const ids=[...$('threads').children].map(el=>el.dataset.id).filter(Boolean).slice(0,120);
+  if(!ids.length)return;
+  statusRefreshing=true;const started=Date.now(),generation=listGeneration;
+  try {
+    const data=await post('/api/thread-statuses',{ids});
+    if(activeProvider!=='codex'||generation!==listGeneration||!listIsVisible())return;
+    for(const thread of data.threads)if(!(liveStatusAt.get(thread.id)>=started))paintThreadStatus(thread.id,thread.status,thread.completionKey,thread.completedAt);
+  } catch { /* The chat connection owns offline notices; keep the last list on a transient failure. */ }
+  finally {statusRefreshing=false;}
 }
 function disconnect() { source?.close(); source = null; }
 function connectEvents(id, generation) {
@@ -628,7 +649,8 @@ function connectEvents(id, generation) {
       if (data.title) $('thread-title').textContent = data.title;
       currentModel = data.model || ''; currentEffort = data.effort || '';
       $('model-label').textContent = [data.model, data.effort ? effortNames[data.effort] || data.effort : activeProvider === 'codex' ? '桌面默认' : ''].filter(Boolean).join(' · ');
-      setConnection(!writable ? '电脑端离线 · 仅查看历史' : busy ? '桌面正在执行 · 实时同步' : '已连接电脑 · 可发送消息', writable);
+      const status=data.status || ((data.requests || []).length?'waiting':busy?'running':'idle');
+      setConnection(!writable ? '电脑端离线 · 仅查看历史' : status==='waiting' ? '待操作 · 电脑正在等你处理' : busy ? '桌面正在执行 · 实时同步' : '已连接电脑 · 可发送消息', writable);
       if (!uncertain) banner('');
       recentTurnIds = new Set(data.turnIds || []);
       if (data.type === 'snapshot') {
@@ -641,7 +663,8 @@ function connectEvents(id, generation) {
       syncLiveOrder(data.order || data.messages.map(m => m.id));
       renderRequests(data.requests); updateComposer();
       displayedCompletionKey=data.completionKey || null;
-      paintThreadStatus(id, data.busy ? (data.requests || []).some(r=>!r.historical) ? 'waiting' : 'running' : 'idle',displayedCompletionKey);
+      liveStatusAt.set(id,Date.now());if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
+      paintThreadStatus(id,status,displayedCompletionKey,data.completedAt);
       if (followBottom) $('message-scroll').scrollTop = $('message-scroll').scrollHeight;
       else if (data.type === 'update' && data.messages?.length) hasUnread = true;
       requestAnimationFrame(markCurrentCompletionRead);
@@ -857,12 +880,11 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { disconnect(); writable = false; updateComposer(); }
   else if (csrf) { if (currentId) connectEvents(currentId, openGeneration); loadThreads(); loadQuota(); }
 });
-// Refresh only the list while it is visible; leave chat and draft untouched.
+// Lightweight metadata only; no chat/history reload, including paginated lists.
 setInterval(() => {
-  if (!document.hidden && csrf && !$('refresh-list').disabled &&
-      $('threads').children.length <= 40 &&
-      ($('sidebar').classList.contains('open') || window.matchMedia('(min-width: 761px)').matches)) loadThreads();
-}, 15000);
+  if(listIsVisible()&&csrf&&!$('refresh-list').disabled&&$('threads').children.length<=40&&Date.now()-lastListRead>=30000){loadThreads();return;}
+  refreshThreadStatuses();
+}, 5000);
 setInterval(() => {
   if (!document.hidden && csrf && ($('sidebar').classList.contains('open') || window.matchMedia('(min-width: 721px)').matches)) loadQuota();
 }, 60000);

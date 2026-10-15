@@ -136,6 +136,15 @@ export function publicConversation(state) {
   };
 }
 
+// Pending questions/approvals take priority even when their original turn ended.
+export function conversationStatus(state, requests = null) {
+  const latest = orderedTurns(state).at(-1);
+  const pending = requests ?? [...(state.requests || []).filter(r => !r.completed), ...asyncQuestions(state)];
+  if (pending.length) return 'waiting';
+  if (state?.threadRuntimeStatus?.type === 'active' || latest?.status === 'inProgress') return 'running';
+  return ({ interrupted:'stopped', failed:'error' })[latest?.status] || 'idle';
+}
+
 export function asyncQuestions(state) {
   const turns = orderedTurns(state), latest = turns.at(-1);
   const answered = new Set();

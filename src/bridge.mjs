@@ -78,6 +78,7 @@ export class Bridge extends EventEmitter {
     } catch (err) {
       t.owner = null; t.state = null; t.revision = null;
       const absent = /no-client-found|no owner|owner.*unavailable/i.test(err.message);
+      this.emit('thread-availability',{id:t.id,availability:!this.ipc.clientId?'offline':absent?'notLoaded':'unknown'});
       t.notify({ type: 'connection', connected: !!this.ipc.clientId, writable: false,
         reason: !this.ipc.clientId ? 'desktop-offline' : absent ? 'owner-unavailable' : 'connection-error',
         message: !this.ipc.clientId ? '请打开电脑上的 Codex，连接后自动恢复' : absent
@@ -138,7 +139,7 @@ export class Bridge extends EventEmitter {
     const changed = snapshot ? messages : messages.filter(m => t.lastMessages.get(m.id) !== next.get(m.id));
     const removed = [...t.lastMessages.keys()].filter(id => !next.has(id));
     t.lastMessages = next;
-    this.emit('thread-status',{id:t.id,status:meta.status,pendingCount:meta.requests.length,
+    this.emit('thread-status',{id:t.id,status:meta.status,availability:'ready',pendingCount:meta.requests.length,
       requestIds:meta.requests.map(r=>r.id),resumeStatus:conversationStatus(t.state,[]),completionKey:meta.completionKey});
     t.notify({ type: snapshot ? 'snapshot' : 'update', ...meta, messages: changed, removed,
       order: messages.map(m => m.id), writable: !!t.owner });
@@ -180,7 +181,7 @@ export class Bridge extends EventEmitter {
     const requests=[...(state.requests || []).filter(r=>!r.completed),...asyncQuestions(state)]
       .filter(r=>!this.acceptedRequests.has(id+':'+r.id));
     const latest=orderedTurns(state).at(-1);
-    return {id,status:conversationStatus(state,requests),pendingCount:requests.length,
+    return {id,status:conversationStatus(state,requests),availability:'ready',pendingCount:requests.length,
       requestIds:requests.map(r=>r.id),resumeStatus:conversationStatus(state,[]),
       completionKey:state.threadRuntimeStatus?.type!=='active' && latest?.status==='completed' ? latest.turnId || latest.id || null : null};
   }
@@ -193,25 +194,27 @@ export class Bridge extends EventEmitter {
   }
   // One snapshot, no inference, no history projection, no persistent subscription.
   // The list service bounds calls to two concurrent probes / four per 5 seconds.
-  probeStatus(id) {
+  probeStatus(id,{ownerOnly=false}={}) {
     if(this.statusProbes.has(id))return this.statusProbes.get(id).promise;
     if(!this.ipc.clientId)return Promise.resolve(null);
     const current=this.threads.get(id);if(current?.owner&&current.state)return Promise.resolve(this.statusOf(id,current.state));
     let done=false,resolveResult;
     const promise=new Promise(resolve=>{resolveResult=resolve;});
-    const probe={promise,owner:null,finish:value=>{
+    const probe={promise,owner:null,following:false,finish:value=>{
       if(done)return;done=true;clearTimeout(probe.timer);this.statusProbes.delete(id);
-      if(probe.owner && !this.threads.get(id)?.listeners?.size) {try{this.ipc.follow(id,'local',false,probe.owner);}catch{}}
+      if(probe.following && !this.threads.get(id)?.listeners?.size) {try{this.ipc.follow(id,'local',false,probe.owner);}catch{}}
       resolveResult(value);
     }};
     this.statusProbes.set(id,probe);
-    probe.timer=setTimeout(()=>probe.finish(null),2500);probe.timer.unref?.();
+    probe.timer=setTimeout(()=>probe.finish({availability:'unknown'}),2500);probe.timer.unref?.();
     this.ipc.request('thread-owner-discovery',{conversationId:id,hostId:'local'},{timeoutMs:1200}).then(reply=>{
       if(done)return;
       probe.owner=reply.handledByClientId;
-      if(!probe.owner)return probe.finish(null);
+      if(!probe.owner)return probe.finish({availability:'notLoaded'});
+      if(ownerOnly)return probe.finish({availability:'ready'});
+      probe.following=true;
       this.ipc.follow(id,'local',true,probe.owner);
-    }).catch(()=>probe.finish(null));
+    }).catch(err=>probe.finish({availability:/no-client-found|no owner|owner.*unavailable/i.test(err.message)?'notLoaded':'unknown'}));
     return promise;
   }
   completionKey(id) {

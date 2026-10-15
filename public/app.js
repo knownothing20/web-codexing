@@ -1,4 +1,4 @@
-import { createReadTracker } from './read-state.js?v=23';
+import { createReadTracker } from './read-state.js?v=24';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -16,7 +16,7 @@ function markCurrentCompletionRead() {
   if (!currentId || !displayedCompletionKey || document.hidden || $('sidebar').classList.contains('open') || !isAtBottom()) return;
   readTracker.markRead(currentId,displayedCompletionKey);
   const actual=threadStatuses.get(currentId);
-  paintThreadStatus(currentId,actual?.status || 'idle',displayedCompletionKey,actual?.completedAt);
+  paintThreadStatus(currentId,actual?.status || 'idle',displayedCompletionKey,actual?.completedAt,actual?.availability);
 }
 let selectedSkills = [], selectedThreads = [], pickerMode = 'skills', pickerItems = [], pickerNext = null, pickerGeneration = 0, requestSignature = '';
 let requestsNow = [], imageReturnFocus;
@@ -584,7 +584,7 @@ async function loadThreads(append = false) {
       const heading=document.createElement('div');heading.className='thread-row-heading';heading.append(title);
       meta.append(project, time); button.append(heading, meta); button.onclick = () => openThread(thread.id, thread.title); $('threads').append(button);
       const recent=liveStatusAt.get(thread.id)>=started ? threadStatuses.get(thread.id) : thread;
-      paintThreadStatus(thread.id,recent.status,recent.completionKey,recent.completedAt);
+      paintThreadStatus(thread.id,recent.status,recent.completionKey,recent.completedAt,recent.availability);
     }
     threadNext = data.next; $('more-threads').hidden = threadNext === null;
     $('threads').scrollTop = listScrollTop;
@@ -597,13 +597,19 @@ async function loadThreads(append = false) {
   } catch (err) { toast(err.message); if (activeProvider !== 'codex') renderIntegration(err.message); }
   finally { if (generation === listGeneration) $('refresh-list').disabled = false; }
 }
-function paintThreadStatus(id,status,completionKey,completedAt) {
-  threadStatuses.set(id,{status,completionKey,completedAt});
+function paintThreadStatus(id,status,completionKey,completedAt,availability) {
+  availability=availability ?? threadStatuses.get(id)?.availability ?? 'unknown';
+  threadStatuses.set(id,{status,completionKey,completedAt,availability});
   if(threadStatuses.size>500)threadStatuses.delete(threadStatuses.keys().next().value);
   if(completionKey!==undefined) threadCompletion.set(id,completionKey);
   const unread=readTracker.observe(id,{status,completionKey:threadCompletion.get(id),completedAt});
   if(unread)status='unread';
   const row=[...$('threads').children].find(el=>el.dataset.id===id);if(!row)return;
+  let loadBadge=row.querySelector('.thread-availability');
+  if(availability==='notLoaded') {
+    if(!loadBadge){loadBadge=document.createElement('span');loadBadge.className='thread-availability';row.querySelector('small').insertBefore(loadBadge,row.querySelector('time'));}
+    loadBadge.textContent='未加载';loadBadge.title='尚未在电脑 Codex 加载，历史仍可查看；发送前需要先在电脑打开';
+  } else loadBadge?.remove();
   const names={running:['●','进行中'],waiting:['◐','待操作'],unread:['●','已完成'],error:['!','出错'],stopped:['■','已停止'],offline:['○','离线'],notLoaded:['○','未加载']};
   let icon=row.querySelector('.thread-status');
   if(!names[status]){icon?.remove();return;}
@@ -620,7 +626,7 @@ async function refreshThreadStatuses() {
   try {
     const data=await post('/api/thread-statuses',{ids});
     if(activeProvider!=='codex'||generation!==listGeneration||!listIsVisible())return;
-    for(const thread of data.threads)if(!(liveStatusAt.get(thread.id)>=started))paintThreadStatus(thread.id,thread.status,thread.completionKey,thread.completedAt);
+    for(const thread of data.threads)if(!(liveStatusAt.get(thread.id)>=started))paintThreadStatus(thread.id,thread.status,thread.completionKey,thread.completedAt,thread.availability);
   } catch { /* The chat connection owns offline notices; keep the last list on a transient failure. */ }
   finally {statusRefreshing=false;}
 }
@@ -640,6 +646,13 @@ function connectEvents(id, generation) {
     const data = JSON.parse(event.data);
     if (data.type === 'connection') {
       writable = !!data.writable;
+      if(activeProvider==='codex') {
+        const actual=threadStatuses.get(id);
+        const availability=data.writable?'ready':!data.connected?'offline':data.reason==='owner-unavailable'?'notLoaded':'unknown';
+        liveStatusAt.set(id,Date.now());
+        if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
+        paintThreadStatus(id,actual?.status || 'unknown',actual?.completionKey,actual?.completedAt,availability);
+      }
       offline(data.writable ? '' : data.message, data.connected, data.reason); setConnection(data.message, data.writable, data.connected); renderRequests(requestsNow); updateComposer(); return;
     }
     if (data.type === 'snapshot' || data.type === 'update') {
@@ -664,7 +677,7 @@ function connectEvents(id, generation) {
       renderRequests(data.requests); updateComposer();
       displayedCompletionKey=data.completionKey || null;
       liveStatusAt.set(id,Date.now());if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
-      paintThreadStatus(id,status,displayedCompletionKey,data.completedAt);
+      paintThreadStatus(id,status,displayedCompletionKey,data.completedAt,'ready');
       if (followBottom) $('message-scroll').scrollTop = $('message-scroll').scrollHeight;
       else if (data.type === 'update' && data.messages?.length) hasUnread = true;
       requestAnimationFrame(markCurrentCompletionRead);

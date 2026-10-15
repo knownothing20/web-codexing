@@ -97,14 +97,56 @@ test('existing live updates win over delayed probes and remain cached after leav
  service.close();assert.equal(bridge.listenerCount('thread-status'),0);
 });
 
-test('idle rows use metadata only while a known pending live state can refresh after leaving',async()=>{
+test('idle rows check ownership only, cache it and refresh full status only for a known pending state',async()=>{
  let now=10000,calls=0;const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
- bridge.probeStatus=async()=>{calls++;return{status:'idle',pendingCount:0,completionKey:'turn'};};
+ const options=[];bridge.probeStatus=async(id,option)=>{calls++;options.push(option);return option.ownerOnly?{availability:'ready'}:{status:'idle',availability:'ready',pendingCount:0,completionKey:'turn'};};
  const row={id:'chat',status:'idle',stamp:'same',pendingIds:[],completionKey:'turn'};
  const service=new ListStatus(bridge,{statusRecords:()=>[row]},{now:()=>now});
- for(let i=0;i<10;i++){now+=5000;service.read(['chat']);}assert.equal(calls,0);
+ service.read(['chat']);await tick();
+ for(let i=0;i<10;i++){now+=5000;service.read(['chat']);}assert.equal(calls,1);assert.equal(options[0].ownerOnly,true);
  bridge.emit('thread-status',{id:'chat',status:'waiting',pendingCount:1,completionKey:'turn'});
- assert.equal(service.read(['chat'])[0].status,'waiting');assert.equal(calls,0);
- now+=5000;service.read(['chat']);await tick();assert.equal(calls,1);assert.equal(service.read(['chat'])[0].status,'idle');
+ assert.equal(service.read(['chat'])[0].status,'waiting');assert.equal(calls,1);
+ now+=5000;service.read(['chat']);await tick();assert.equal(calls,2);assert.equal(options[1].ownerOnly,false);assert.equal(service.read(['chat'])[0].status,'idle');
  service.close();
+});
+
+test('owner-only checks never subscribe to messages and distinguish unloaded chats from connection errors',async()=>{
+ const ipc=new EventEmitter();ipc.clientId='client';ipc.close=()=>{};
+ ipc.request=async(method,{conversationId})=>{
+  assert.equal(method,'thread-owner-discovery');
+  if(conversationId==='ready')return{handledByClientId:'owner'};
+  if(conversationId==='missing')throw new Error('no-client-found');
+  if(conversationId==='failed')throw new Error('request timeout');
+  return{};
+ };
+ ipc.follow=()=>{throw new Error('Owner-only checks must never follow chat messages');};
+ const bridge=new Bridge(ipc,{});
+ assert.equal((await bridge.probeStatus('ready',{ownerOnly:true})).availability,'ready');
+ assert.equal((await bridge.probeStatus('missing',{ownerOnly:true})).availability,'notLoaded');
+ assert.equal((await bridge.probeStatus('absent',{ownerOnly:true})).availability,'notLoaded');
+ assert.equal((await bridge.probeStatus('failed',{ownerOnly:true})).availability,'unknown');
+ assert.equal(bridge.threads.size,0);assert.equal(bridge.statusProbes.size,0);bridge.close();
+});
+
+test('unloaded is independent of pending questions and completed/read markers',async()=>{
+ const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
+ const options=[];bridge.probeStatus=async(id,option)=>{options.push(option);return{availability:'notLoaded'};};
+ const records=[{id:'completed',status:'idle',stamp:'a',pendingIds:[],completionKey:'old-result'},
+  {id:'pending',status:'stopped',stamp:'b',pendingIds:['question'],completionKey:null}];
+ const service=new ListStatus(bridge,{statusRecords:()=>records});service.read(records.map(r=>r.id));await tick();
+ const [completed,pending]=service.read(records.map(r=>r.id));
+ assert.equal(completed.availability,'notLoaded');assert.equal(completed.status,'idle');assert.equal(completed.completionKey,'old-result');
+ assert.equal(pending.availability,'notLoaded');assert.equal(pending.status,'waiting');assert.equal(pending.pendingCount,1);
+ assert.ok(options.every(option=>option.ownerOnly));service.close();
+});
+
+test('an actual attach failure immediately replaces older ready availability without extra probing',async()=>{
+ const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();let probes=0;
+ bridge.probeStatus=async()=>{probes++;return{availability:'ready'};};
+ const row={id:'chat',status:'idle',stamp:'same',pendingIds:[],completionKey:'old'};
+ const service=new ListStatus(bridge,{statusRecords:()=>[row]});service.read(['chat']);await tick();
+ assert.equal(service.read(['chat'])[0].availability,'ready');
+ bridge.emit('thread-availability',{id:'chat',availability:'notLoaded'});
+ for(let i=0;i<5;i++)assert.equal(service.read(['chat'])[0].availability,'notLoaded');
+ assert.equal(probes,1);service.close();assert.equal(bridge.listenerCount('thread-availability'),0);
 });

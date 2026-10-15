@@ -86,7 +86,7 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     const reader = response.body.getReader(); let text = '';
     while (!text.includes('snapshot')) { const chunk = await reader.read(); text += new TextDecoder().decode(chunk.value); }
     const liveStatus=await (await fetch(url+'/api/thread-statuses',{method:'POST',headers:statusHeaders,body:JSON.stringify({ids:[id]})})).json();
-    assert.equal(liveStatus.threads[0].status,'waiting');
+    assert.equal(liveStatus.threads[0].status,'waiting');assert.equal(liveStatus.threads[0].availability,'ready');
     assert.match(text, /真实协议测试/);
     const input = () => fetch(url + `/api/threads/${id}/input`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: JSON.stringify({ requestId: 'question', answers: { choice: '选项一' } }) });
     assert.equal((await input()).status, 200); assert.equal((await input()).status, 200); assert.equal(answered, 1);

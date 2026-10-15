@@ -24,6 +24,8 @@
 .thread-status{flex-shrink:0;font-size:10px;color:#98a292;white-space:nowrap}
 .thread-status.running{color:#3b8051}.thread-status.waiting{color:#a1792b}.thread-status.error{color:#b24f43}
 .thread-status.unread{color:#347ed9;font-weight:600}
+.thread-availability{flex-shrink:0;color:#858c80;border:1px solid #dce2d6;border-radius:4px;padding:0 4px;font-size:9px;line-height:1.6}
+.thread-row small>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .message.user.guidance-message .message-body{background:#e6f1fc;border:1px solid #c8dff4;color:#294b6a}
 .guidance-badge{display:block;font-size:10px;font-weight:600;color:#4d82b0;margin-bottom:5px;letter-spacing:.2px}
 .send-button.steer{width:auto;min-width:44px;padding:0 12px;font-size:12px;border-radius:11px}

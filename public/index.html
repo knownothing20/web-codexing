@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#f7f8f5"><meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=25"><title>Remote Coding</title>
+  <link rel="stylesheet" href="/style.css?v=26"><title>Remote Coding</title>
 </head>
 <body>
   <section id="pair-view" class="pair-view">
@@ -48,7 +48,7 @@
         <div id="selected-context" class="selected-context" hidden></div>
         <textarea id="draft" rows="1" placeholder="发消息给电脑上的 Codex…" aria-label="消息输入框" maxlength="8000" disabled></textarea>
         <div class="context-actions"><button id="pick-thread" class="context-button" disabled>＋ 引用会话</button><button id="pick-skill" class="context-button" disabled>＋ Skill</button></div>
-        <div class="composer-actions"><button id="model-settings" class="model-button" aria-label="选择模型和思考档位" disabled><span id="model-label">桌面会话设置</span><span class="model-chevron">⌄</span></button><div><button id="stop" class="stop-button" hidden>■ 停止</button><button id="send" class="send-button" disabled aria-label="发送消息">↑</button></div></div>
+        <div class="composer-actions"><button id="model-settings" class="model-button" aria-label="选择模型、思考档位和加速" disabled><span id="model-label">桌面会话设置</span><span class="model-chevron">⌄</span></button><div><button id="stop" class="stop-button" hidden>■ 停止</button><button id="send" class="send-button" disabled aria-label="发送消息">↑</button></div></div>
       </div><div class="composer-note"><span id="draft-note">消息会交给当前桌面会话执行</span><span id="char-count"></span></div></div>
       <div id="toast" class="toast" role="status" hidden></div>
     </main>
@@ -67,16 +67,18 @@
   </div>
   <div id="settings-overlay" class="settings-overlay" hidden>
     <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <div class="settings-heading"><div><span class="eyebrow">CURRENT CONVERSATION</span><h2 id="settings-title">模型与思考档位</h2></div><button id="close-settings" class="icon-button" aria-label="关闭模型设置">×</button></div>
+      <div class="settings-heading"><div><span class="eyebrow">CURRENT CONVERSATION</span><h2 id="settings-title">模型与加速设置</h2></div><button id="close-settings" class="icon-button" aria-label="关闭模型设置">×</button></div>
       <p class="settings-intro">与电脑端的这条会话同步，保存后用于下一轮回复。</p>
       <label for="model-select">模型</label><select id="model-select" disabled><option>正在读取模型目录…</option></select>
       <p id="model-description" class="model-description"></p>
       <label for="effort-select">思考档位</label><select id="effort-select" disabled></select>
       <p class="effort-note">更高档位通常需要更多时间。当前正在执行的回复继续使用原设置。</p>
+      <div class="fast-setting"><label for="fast-mode"><strong>模型加速 <span id="fast-status">正在读取…</span></strong><small>跟随电脑端设置</small></label><input id="fast-mode" type="checkbox" role="switch" disabled aria-describedby="fast-note"></div>
+      <p id="fast-note" class="fast-note">开启后会更快消耗额度。</p>
       <div id="settings-error" class="error" role="alert"></div>
       <button id="save-settings" class="primary" disabled>保存到当前会话 <span>↗</span></button>
       <p class="settings-foot">模型列表来自本机 Codex。实际可用性以执行结果为准。</p>
     </section>
   </div>
-  <script src="/app.js?v=25" type="module"></script>
+  <script src="/app.js?v=26" type="module"></script>
 </body></html>

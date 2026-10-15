@@ -1,4 +1,5 @@
-import { createReadTracker } from './read-state.js?v=25';
+import { createReadTracker } from './read-state.js?v=26';
+import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=26';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -28,6 +29,11 @@ if (!Object.hasOwn(providerNames, activeProvider)) activeProvider = 'codex';
 function threadPath(id, action) { return activeProvider === 'codex' ? `/api/threads/${id}/${action}` : `/api/providers/${activeProvider}/threads/${id}/${action}`; }
 let messageOrder = [], recentIds = new Set(), recentTurnIds = new Set(), toastTimer;
 let currentModel = '', currentEffort = '', modelCatalog = [], settingsBaseline, hasUnread = false;
+let currentServiceTier=null,currentServiceTierKnown=false,speedDirty=false,speedConflict=false,settingsSaving=false;
+function renderModelLabel() {
+  const speed=tierKind(currentServiceTier);
+  $('model-label').textContent=[currentModel,currentEffort?effortNames[currentEffort]||currentEffort:'桌面默认',speed==='fast'?'⚡ 加速':speed==='ultrafast'?'⚡ 超级加速':''].filter(Boolean).join(' · ');
+}
 let expandFromId = null, olderOutsideRange = new Set();
 const manualProgress = new Map();
 const foldStorageKey = 'rc_progress_expansion_v1';
@@ -170,7 +176,7 @@ function updateComposer() {
   $('pick-thread').disabled = !currentId || sending || activeProvider !== 'codex';
   $('pick-skill').disabled = !currentId || sending || activeProvider !== 'codex';
   document.querySelector('.context-actions').hidden = activeProvider !== 'codex';
-  $('model-settings').title = activeProvider === 'codex' ? '选择模型与思考档位' : '模型设置请在电脑端处理';
+  $('model-settings').title = activeProvider === 'codex' ? '选择模型、思考档位与加速' : '模型设置请在电脑端处理';
   $('draft').placeholder = `发消息给电脑上的 ${providerNames[activeProvider]}…`;
   if (activeProvider !== 'codex') $('draft-note').textContent = uncertain ? '结果待确认，请核对电脑，避免重复发送' : writable ? activeProvider === 'claude' ? '通过本机通道发送 · 审批仍在电脑处理' : '发送到 WorkBuddy 本地助理' : '查看历史 · 等待电脑连接';
 }
@@ -680,7 +686,12 @@ function connectEvents(id, generation) {
       offline(writable ? '' : `${providerNames[activeProvider]} 电脑端离线，历史仍可查看`);
       if (data.title) $('thread-title').textContent = data.title;
       currentModel = data.model || ''; currentEffort = data.effort || '';
-      $('model-label').textContent = [data.model, data.effort ? effortNames[data.effort] || data.effort : activeProvider === 'codex' ? '桌面默认' : ''].filter(Boolean).join(' · ');
+      currentServiceTier=data.serviceTier??null;currentServiceTierKnown=data.serviceTierKnown===true;renderModelLabel();
+      if(!$('settings-overlay').hidden&&settingsBaseline?.id===currentId) {
+        if(speedDirty&&!settingsSaving&&(!currentServiceTierKnown||!sameTier(settingsBaseline.serviceTier,currentServiceTier))){speedConflict=true;$('settings-error').textContent='电脑端加速设置已改变，请关闭后重新打开设置。';$('save-settings').disabled=true;}
+        else if(!speedDirty){settingsBaseline.serviceTier=currentServiceTier;settingsBaseline.serviceTierKnown=currentServiceTierKnown;}
+        populateSpeed();
+      }
       const status=data.status || ((data.requests || []).length?'waiting':busy?'running':'idle');
       setConnection(!writable ? '电脑端离线 · 仅查看历史' : status==='waiting' ? '待操作 · 电脑正在等你处理' : busy ? '桌面正在执行 · 实时同步' : '已连接电脑 · 可发送消息', writable);
       if (!uncertain) banner('');
@@ -719,6 +730,7 @@ async function openThread(id, title) {
   selectedSkills = contexts.get(id)?.skills || []; selectedThreads = contexts.get(id)?.threads || []; renderContext();
   requestSignature = ''; requestsNow = []; $('picker-overlay').hidden = true; $('settings-overlay').hidden = true; closeImage();
   writable = false; busy = false; uncertain = false; sending = false; historyCursor = null;
+  currentServiceTier=null;currentServiceTierKnown=false;
   messageMap.clear(); messageNodes.clear(); messageOrder = []; recentIds = new Set(); recentTurnIds = new Set(); $('messages').replaceChildren(); $('requests').replaceChildren();
   $('empty').hidden = true; $('thread-title').textContent = title || '正在加载会话'; $('draft').value = drafts.get(id) || '';
   sessionStorage.setItem('rc_thread', id); setSidebar(false); banner(''); offline(''); setConnection('正在读取最近消息…', false); updateComposer();
@@ -853,6 +865,14 @@ new ResizeObserver(entries => {
 }).observe(document.querySelector('.composer-wrap'));
 
 function closeSettings() { $('settings-overlay').hidden = true; $('model-settings').focus(); }
+function populateSpeed() {
+  const model=modelCatalog.find(m=>m.id===$('model-select').value),switcher=$('fast-mode');
+  const current=effectiveTier(currentServiceTier,model);
+  if(!speedDirty)switcher.checked=currentServiceTierKnown&&accelerated(current);
+  switcher.disabled=!writable||!currentServiceTierKnown||tierKind(current)==='unknown'||(!fastTier(model)&&!accelerated(current));
+  $('fast-status').textContent=!currentServiceTierKnown?'客户端未提供状态':!speedDirty&&tierKind(current)==='ultrafast'?'超级加速（跟随客户端）':switcher.checked?'已开启':'已关闭';
+  $('fast-note').textContent=!currentServiceTierKnown?'保留客户端设置；连接支持加速同步的桌面会话后可调整。':!fastTier(model)?'此模型未提供可选加速档位；已有加速可以关闭，其他设置会保留。':'开启后会更快消耗额度。与电脑端当前会话同步，下一轮回复生效。';
+}
 function populateEfforts(preferred) {
   const model = modelCatalog.find(m => m.id === $('model-select').value);
   $('effort-select').replaceChildren();
@@ -862,12 +882,15 @@ function populateEfforts(preferred) {
   $('effort-select').value = model?.efforts.includes(preferred) ? preferred : model?.defaultEffort || model?.efforts[0] || '';
   $('effort-select').disabled = !model?.efforts.length;
   $('model-description').textContent = model?.description || '';
-  $('save-settings').disabled = !model || !$('effort-select').value;
+  $('save-settings').disabled = !model || !$('effort-select').value || speedConflict || settingsSaving;
+  populateSpeed();
 }
 $('model-settings').onclick = async () => {
   $('settings-overlay').hidden = false; $('settings-error').textContent = '';
   $('save-settings').disabled = true; $('model-select').disabled = true;
-  settingsBaseline = { id: currentId, model: currentModel, effort: currentEffort };
+  speedDirty=false;speedConflict=false;settingsSaving=false;
+  settingsBaseline = { id: currentId, model: currentModel, effort: currentEffort,serviceTier:currentServiceTier,serviceTierKnown:currentServiceTierKnown };
+  $('fast-mode').disabled=true;
   try {
     const data = await api('/api/models'); modelCatalog = data.models;
     if ($('settings-overlay').hidden || settingsBaseline.id !== currentId) return;
@@ -881,6 +904,7 @@ $('model-settings').onclick = async () => {
   } catch (err) { $('settings-error').textContent = err.message; }
 };
 $('model-select').onchange = () => populateEfforts(currentEffort);
+$('fast-mode').onchange=()=>{speedDirty=true;populateSpeed();};
 $('close-settings').onclick = closeSettings;
 $('settings-overlay').onclick = event => { if (event.target === $('settings-overlay')) closeSettings(); };
 document.addEventListener('keydown', event => {
@@ -895,18 +919,26 @@ document.addEventListener('keydown', event => {
   }
 });
 $('save-settings').onclick = async () => {
-  $('save-settings').disabled = true; $('settings-error').textContent = '';
+  $('save-settings').disabled = true; $('settings-error').textContent = '';settingsSaving=true;
   try {
+    const speedSettings={};
+    if(speedDirty) {
+      const model=modelCatalog.find(m=>m.id===$('model-select').value);
+      const desired=$('fast-mode').checked?fastTier(model)||settingsBaseline.serviceTier:'default';
+      if(!sameTier(desired,settingsBaseline.serviceTier)){speedSettings.serviceTier=desired;speedSettings.previousServiceTier=settingsBaseline.serviceTier;}
+    }
     const result = await post(`/api/threads/${settingsBaseline.id}/settings`, {
       model: $('model-select').value, effort: $('effort-select').value,
       previousModel: settingsBaseline.model, previousEffort: settingsBaseline.effort,
+      ...speedSettings,
     });
     if (currentId === settingsBaseline.id) {
       currentModel = result.model; currentEffort = result.effort;
-      $('model-label').textContent = `${result.model} · ${effortNames[result.effort] || result.effort}`;
+      currentServiceTier=result.serviceTier??null;currentServiceTierKnown=result.serviceTierKnown===true;renderModelLabel();
     }
     closeSettings(); toast('已确认同步到电脑，下一轮使用此设置');
-  } catch (err) { $('settings-error').textContent = err.message; $('save-settings').disabled = false; }
+  } catch (err) { $('settings-error').textContent = err.message; $('save-settings').disabled = speedConflict; }
+  finally{settingsSaving=false;}
 };
 $('logout').onclick = async () => { try { await post('/api/logout', {}); sessionStorage.clear(); showPair(); } catch (err) { toast(err.message); } };
 document.addEventListener('visibilitychange', () => {

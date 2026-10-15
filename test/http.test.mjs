@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import net from 'node:net';
 import { FrameReader, frame } from '../src/ipc.mjs';
+import {catalogFixture} from './catalog-fixture.mjs';
 
 test('HTTP pairing, SSE, message routing, deduplication and access boundaries', { timeout: 25000 }, async () => {
   const base = resolve('.local'); mkdirSync(base, { recursive: true });
@@ -20,13 +21,18 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
   const history = new DatabaseSync(join(fixture, 'thread_history_1.sqlite'));
   history.exec('CREATE TABLE thread_items (thread_id TEXT,turn_id TEXT,rollout_ordinal INTEGER,item_id TEXT,item_type TEXT,item_json TEXT,created_at_ms INTEGER)');
   history.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id, 'turn1', 1, 'u1', 'userMessage', JSON.stringify({ id: 'u1', type: 'userMessage', content: [{ type: 'text', text: '测试输入' }] }), 1700000000000); history.close();
-  const sockets = new Set(); let starts = 0, answered = 0;
+  const sockets = new Set(); let starts = 0, answered = 0,speedUpdates=0,serviceTier='priority';
   const fakeServer = net.createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket));
     const reader = new FrameReader(message => {
       if (message.type === 'request') {
         let result = {};
         if (message.method === 'initialize') result = { clientId: 'test-client' };
+        if(message.method==='thread-follower-read-model-settings')result={settings:{model:'demo-fast',reasoningEffort:'high'}};
+        if(message.method==='thread-follower-update-thread-settings'){
+          speedUpdates++;serviceTier=message.params.threadSettings.serviceTier;result={applied:true};
+          setTimeout(()=>socket.write(frame({type:'broadcast',method:'thread-stream-state-changed',version:11,sourceClientId:'fake-desktop',params:{conversationId:id,hostId:'local',change:{type:'patches',baseRevision:1,revision:2,patches:[{op:'replace',path:'/latestThreadSettings/serviceTier',value:serviceTier}]}}})),20);
+        }
         if (message.method === 'thread-follower-start-turn') {
           starts++;
           assert.equal(message.version, 2);
@@ -42,7 +48,7 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
       } else if (message.method === 'thread-stream-following-changed' && message.params.following) {
         socket.write(frame({ type: 'broadcast', method: 'thread-stream-state-changed', version: 11, sourceClientId: 'fake-desktop', targetClientIds: ['test-client'],
           params: { conversationId: id, hostId: 'local', change: { type: 'snapshot', revision: 1, conversationState: {
-            id, title: '集成测试', requests: [{ id: 'question', method: 'item/tool/requestUserInput', params: { questions: [{ id: 'choice', question: '请选择', isOther: false, options: [{ label: '选项一' }] }] } }], threadRuntimeStatus: { type: 'idle' }, turns: [{ turnId: 'turn1', status: 'completed', items: [{ id: 'a1', type: 'agentMessage', text: '真实协议测试' }] }],
+            id, title: '集成测试',latestModel:'demo-fast',latestReasoningEffort:'high',latestThreadSettings:{serviceTier}, requests: [{ id: 'question', method: 'item/tool/requestUserInput', params: { questions: [{ id: 'choice', question: '请选择', isOther: false, options: [{ label: '选项一' }] }] } }], threadRuntimeStatus: { type: 'idle' }, turns: [{ turnId: 'turn1', status: 'completed', items: [{ id: 'a1', type: 'agentMessage', text: '真实协议测试' }] }],
           } } } }));
       }
     });
@@ -53,7 +59,7 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
   const port = 33000 + Math.floor(Math.random() * 2000);
   let child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', 'src/server.mjs'], {
     cwd: process.cwd(), windowsHide: true,
-    env: { ...process.env, CODEX_HOME: fixture, REMOTE_CODING_PORT: String(port), REMOTE_CODING_IPC_PIPE: pipe, REMOTE_CODING_RUNTIME_DIR: fixture, REMOTE_CODING_EXPERIMENTAL_INTEGRATIONS: '1', REMOTE_CODING_DISABLE_DESKTOP_OPEN: '1', REMOTE_CODING_DISABLE_ACCOUNT_QUOTA: '1' },
+    env: { ...process.env,...catalogFixture(fixture), CODEX_HOME: fixture, REMOTE_CODING_PORT: String(port), REMOTE_CODING_IPC_PIPE: pipe, REMOTE_CODING_RUNTIME_DIR: fixture, REMOTE_CODING_EXPERIMENTAL_INTEGRATIONS: '1', REMOTE_CODING_DISABLE_DESKTOP_OPEN: '1', REMOTE_CODING_DISABLE_ACCOUNT_QUOTA: '1' },
     stdio: 'ignore',
   });
   const runtimePath = join(fixture, 'runtime.json');
@@ -64,6 +70,7 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     const runtime = JSON.parse(readFileSync(runtimePath, 'utf8'));
     const url = `http://127.0.0.1:${runtime.port}`;
     let response = await fetch(url + '/api/threads'); assert.equal(response.status, 401);
+    const tierModule=await fetch(url+'/service-tier.js?v=26');assert.equal(tierModule.status,200);assert.match(tierModule.headers.get('content-type'),/javascript/);
     response = await fetch(url + '/api/local/status'); assert.equal(response.status, 403);
     response = await fetch(url + '/api/pair', { method: 'POST', headers: { Origin: 'http://evil.test' }, body: '{}' }); assert.equal(response.status, 403);
     response = await fetch(url + '/api/pair', { method: 'POST', body: JSON.stringify({ code: runtime.pairCode }) }); assert.equal(response.status, 200);
@@ -88,6 +95,10 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     const liveStatus=await (await fetch(url+'/api/thread-statuses',{method:'POST',headers:statusHeaders,body:JSON.stringify({ids:[id]})})).json();
     assert.equal(liveStatus.threads[0].status,'waiting');assert.equal(liveStatus.threads[0].availability,'ready');
     assert.match(text, /真实协议测试/);
+    const modelDirectory=await(await fetch(url+'/api/models',{headers:{Cookie:cookie}})).json();assert.equal(modelDirectory.models[0].serviceTiers[0].id,'priority');
+    const speed=(tier,previous)=>fetch(url+`/api/threads/${id}/settings`,{method:'POST',headers:statusHeaders,body:JSON.stringify({model:'demo-fast',effort:'high',previousModel:'demo-fast',previousEffort:'high',serviceTier:tier,previousServiceTier:previous})});
+    assert.equal((await speed('ultrafast','priority')).status,400);assert.equal(speedUpdates,0);
+    const speedResult=await(await speed('default','priority')).json();assert.equal(speedResult.applied,true);assert.equal(speedResult.serviceTier,'default');assert.equal(speedUpdates,1);
     const input = () => fetch(url + `/api/threads/${id}/input`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: JSON.stringify({ requestId: 'question', answers: { choice: '选项一' } }) });
     assert.equal((await input()).status, 200); assert.equal((await input()).status, 200); assert.equal(answered, 1);
     while(!text.includes('"type":"list-status"')){const chunk=await reader.read();text+=new TextDecoder().decode(chunk.value);}

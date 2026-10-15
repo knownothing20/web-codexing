@@ -144,6 +144,7 @@
 .model-description{font-size:11px;color:#929d88;line-height:1.8;margin:9px 2px 17px;max-height:75px;overflow:auto}
 .effort-note{font-size:11px;color:#939e8a;line-height:1.9;margin:11px 2px 23px}
 .settings-foot{font-size:9px;color:#a3ad9b;line-height:1.8;text-align:center;margin:16px 0 0}
+.fast-setting{display:flex;align-items:center;justify-content:space-between;gap:14px;border:1px solid var(--line);border-radius:12px;padding:13px 14px;background:#f3f6ef}.fast-setting label{margin:0;cursor:pointer}.fast-setting strong{font-size:13px;font-weight:600}.fast-setting strong span{font-size:10px;font-weight:400;color:var(--accent);margin-left:8px}.fast-setting small{display:block;font-size:10px;color:var(--muted);margin-top:5px}.fast-setting input{appearance:none;flex-shrink:0;width:42px;height:25px;margin:0;border-radius:14px;background:#c4cbbb;cursor:pointer;position:relative;transition:background .15s}.fast-setting input:before{content:'';position:absolute;width:19px;height:19px;left:3px;top:3px;background:white;border-radius:50%;box-shadow:0 1px 4px #0002;transition:transform .15s}.fast-setting input:checked{background:var(--accent)}.fast-setting input:checked:before{transform:translateX(17px)}.fast-setting input:disabled{opacity:.45;cursor:default}.fast-note{font-size:10px;color:var(--muted);line-height:1.8;margin:9px 2px 18px}
 .settings-panel .primary{font-size:12px;padding:13px 16px;border-radius:10px;background:#426b51}
 @media(max-width:720px){
   .conversation{padding:24px 22px 20px}.message{margin-bottom:31px}

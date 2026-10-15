@@ -47,6 +47,7 @@ const staticFiles = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/read-state.js', ['read-state.js', 'text/javascript; charset=utf-8']],
+  ['/service-tier.js', ['service-tier.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/manifest.webmanifest', ['manifest.webmanifest', 'application/manifest+json']],
   ['/icon.svg', ['icon.svg', 'image/svg+xml']],
@@ -352,6 +353,7 @@ async function handler(req, res) {
     const { models } = await getModels();
     const model = models.find(m => m.id === data.model);
     if (!model || !model.efforts.includes(data.effort)) return json(res, 400, { error: '请选择目录中的模型和支持的思考档位' });
+    if(Object.hasOwn(data,'serviceTier')&&data.serviceTier!=='default'&&!model.serviceTiers?.some(t=>t.id===data.serviceTier))return json(res,400,{error:'当前模型目录未提供这个加速档位，请重新选择'});
     return json(res, 200, await bridge.settings(id, data));
   }
   return json(res, 404, { error: '接口不存在' });

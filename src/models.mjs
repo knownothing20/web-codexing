@@ -102,6 +102,9 @@ function readModels() {
             id: m.model, name: m.displayName || m.model, description: m.description || '',
             efforts: (m.supportedReasoningEfforts || []).map(e => typeof e === 'string' ? e : e.reasoningEffort),
             defaultEffort: m.defaultReasoningEffort,
+            serviceTiers:(m.serviceTiers || []).filter(t=>['priority','fast','ultrafast'].includes(t.id))
+              .map(t=>({id:t.id,name:t.name||t.id,description:t.description||''})),
+            defaultServiceTier:m.defaultServiceTier || null,
           })));
           if (message.result.nextCursor) send({ id: 'models', method: 'model/list', params: { limit: 100, cursor: message.result.nextCursor } });
           else finish(null, { models, source: 'codex-model-list' });

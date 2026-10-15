@@ -121,7 +121,7 @@ export function publicConversation(state) {
   const active = state?.threadRuntimeStatus?.type === 'active' || turns.at(-1)?.status === 'inProgress';
   return {
     id: state.id, title: state.title || state.fallbackSearchTitle || '未命名会话',
-    model: state.latestModel || '', effort: state.latestReasoningEffort || '',
+    model: state.latestModel || '', effort: state.latestReasoningEffort || '',...serviceTierState(state),
     busy: active, turnId: active ? turns.at(-1)?.turnId : null,
     completionKey: !active && turns.at(-1)?.status === 'completed' ? turns.at(-1).turnId || turns.at(-1).id || null : null,
     messages: messagesFromTurns(turns).slice(-120),
@@ -134,6 +134,12 @@ export function publicConversation(state) {
       reason: r.params?.reason,
     })), ...asyncQuestions(state)],
   };
+}
+
+export function serviceTierState(state) {
+  const settings=state?.latestThreadSettings;
+  const known=!!settings&&Object.hasOwn(settings,'serviceTier');
+  return {serviceTier:known?settings.serviceTier??null:null,serviceTierKnown:known};
 }
 
 // Pending questions/approvals take priority even when their original turn ended.

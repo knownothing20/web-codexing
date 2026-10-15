@@ -7,11 +7,13 @@ import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import net from 'node:net';
 import { FrameReader, frame } from '../src/ipc.mjs';
+import {catalogFixture} from './catalog-fixture.mjs';
 
 const base = resolve('.local'); mkdirSync(base, { recursive: true });
 const fixture = mkdtempSync(join(base, 'ui-test-')), id = randomUUID(), pipe = '\\\\.\\pipe\\remote-coding-ui-' + randomUUID();
 const statusMode=process.argv.includes('--status'),otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
+const settingsMode=process.argv.includes('--settings');
 let ownerReads=0,fullFollows=0;const checkedIds=new Set();
 const metrics=()=>{if(manyMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows}));};
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
@@ -34,6 +36,7 @@ const sockets = new Set(); let revision = 1, online = true;
 const otherState={id:otherId,title:'另一个会话 · 隔离测试',threadRuntimeStatus:{type:'idle'},requests:[],turns:[{turnId:'other-turn',status:'completed',items:[{id:'other-message',type:'agentMessage',text:'这是一条独立的演示会话，用来验证未打开会话的列表状态。'}]}]};
 const unloadedState={...otherState,id:unloadedId,title:'尚未打开 · 隔离测试'};
 const requestTemplate=structuredClone(state.requests);
+if(settingsMode){state.latestModel='demo-fast';state.latestReasoningEffort='high';state.latestThreadSettings={model:'demo-fast',serviceTier:'priority'};state.requests=[];state.threadRuntimeStatus={type:'idle'};state.turns[0].status='completed';}
 if(statusMode){state.threadRuntimeStatus={type:'idle'};state.turns[0].status='interrupted';}
 const broadcast = (socket,conversationId=id) => socket.write(frame({type:'broadcast',method:'thread-stream-state-changed',version:11,sourceClientId:'fixture-owner',params:{conversationId,hostId:'local',change:{type:'snapshot',revision:revision++,conversationState:conversationId===unloadedId?unloadedState:conversationId===otherId?otherState:state}}}));
 const fake = net.createServer(socket => {
@@ -43,6 +46,11 @@ const fake = net.createServer(socket => {
       if(message.method==='thread-owner-discovery'){ownerReads++;checkedIds.add(message.params.conversationId);metrics();}
       if(message.method==='thread-owner-discovery'&&(message.params.conversationId===unloadedId&&!missingLoaded||manyIds.has(message.params.conversationId))){socket.write(frame({type:'response',requestId:message.requestId,resultType:'error',error:'no-client-found'}));return;}
       let result={}; if(message.method==='initialize')result={clientId:'fixture-client'};
+      if(message.method==='thread-follower-update-thread-settings') {
+        Object.assign(state.latestThreadSettings,message.params.threadSettings);state.latestModel=message.params.threadSettings.model;state.latestReasoningEffort=message.params.threadSettings.effort;
+        writeFileSync(join(fixture,'settings-receipt.json'),JSON.stringify(message.params));result={applied:true};setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
+      }
+      if(message.method==='thread-follower-read-model-settings')result={settings:{model:state.latestModel,reasoningEffort:state.latestReasoningEffort}};
       if(message.method==='thread-follower-submit-user-input') {
         writeFileSync(join(fixture,'receipt.json'),JSON.stringify(message.params.response));
         state.requests=[]; state.threadRuntimeStatus={type:'idle'}; state.turns[0].status='completed';
@@ -68,7 +76,7 @@ const fake = net.createServer(socket => {
   }); socket.on('data',data=>reader.push(data));
 });
 await new Promise(resolve=>fake.listen(pipe,resolve));
-const child=spawn(process.execPath,['--disable-warning=ExperimentalWarning','src/server.mjs'],{cwd:process.cwd(),windowsHide:true,env:{...process.env,CODEX_HOME:fixture,REMOTE_CODING_RUNTIME_DIR:fixture,REMOTE_CODING_IPC_PIPE:pipe,REMOTE_CODING_PORT:'35470',REMOTE_CODING_WORKBUDDY_ACCESS_TOKEN:'',REMOTE_CODING_DISABLE_DESKTOP_OPEN:'1',REMOTE_CODING_DISABLE_ACCOUNT_QUOTA:'1'},stdio:'ignore'});
+const child=spawn(process.execPath,['--disable-warning=ExperimentalWarning','src/server.mjs'],{cwd:process.cwd(),windowsHide:true,env:{...process.env,...settingsMode?catalogFixture(fixture):{},CODEX_HOME:fixture,REMOTE_CODING_RUNTIME_DIR:fixture,REMOTE_CODING_IPC_PIPE:pipe,REMOTE_CODING_PORT:'35470',REMOTE_CODING_WORKBUDDY_ACCESS_TOKEN:'',REMOTE_CODING_DISABLE_DESKTOP_OPEN:'1',REMOTE_CODING_DISABLE_ACCOUNT_QUOTA:'1'},stdio:'ignore'});
 const runtimeFile=join(fixture,'runtime.json');
 for(let tries=0;tries<100&&!existsSync(runtimeFile);tries++)await new Promise(resolve=>setTimeout(resolve,50));
 const runtime=JSON.parse(readFileSync(runtimeFile,'utf8'));
@@ -94,6 +102,7 @@ const command = line => {
   }
   if(line.trim()==='quit')stop();
   if(line.trim()==='load-missing')missingLoaded=true;
+  if(line.trim()==='desktop-fast-off'||line.trim()==='desktop-fast-on'){state.latestThreadSettings.serviceTier=line.trim()==='desktop-fast-on'?'priority':'default';for(const s of sockets)broadcast(s);}
   if(line.trim()==='stop-question'){
     state.requests=structuredClone(requestTemplate);state.requests[0].id=randomUUID();state.threadRuntimeStatus={type:'idle'};state.turns[0].status='interrupted';
     if(statusMode){const d=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));d.prepare('UPDATE thread_turns SET status=? WHERE thread_id=?').run('interrupted',id);d.close();}

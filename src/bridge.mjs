@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { applyPatches, orderedTurns, publicConversation, conversationStatus, asyncQuestions } from './state.mjs';
+import { applyPatches, orderedTurns, publicConversation, conversationStatus, asyncQuestions, serviceTierState } from './state.mjs';
+import {sameTier} from '../public/service-tier.js';
 
 export class Bridge extends EventEmitter {
   constructor(ipc, catalog, images = null, { retryMs = 5000 } = {}) {
@@ -254,12 +255,15 @@ export class Bridge extends EventEmitter {
     }, { targetClientId: t.owner, hostId: t.hostId, timeoutMs: 12000 });
     return response.result;
   }
-  async settings(id, { model, effort, previousModel, previousEffort }) {
+  async settings(id, data) {
+    const {model,effort,previousModel,previousEffort,serviceTier,previousServiceTier}=data;
     const t = this.writableThread(id);
     const view = publicConversation(t.state);
     if (view.model !== previousModel || view.effort !== previousEffort) throw new Error('电脑端设置已经改变，请重新打开模型设置');
+    const changeTier=Object.hasOwn(data,'serviceTier');
+    if(changeTier&&(!view.serviceTierKnown||!Object.hasOwn(data,'previousServiceTier')||!sameTier(view.serviceTier,previousServiceTier)))throw new Error('电脑端加速设置已经改变或未提供，请重新打开模型设置');
     const response = await this.ipc.request('thread-follower-update-thread-settings', {
-      conversationId: id, threadSettings: { model, effort },
+      conversationId: id, threadSettings: { model, effort,...changeTier?{serviceTier}:{} },
       condition: { ifModelEquals: previousModel || null, ifEffortEquals: previousEffort || null },
     }, { targetClientId: t.owner, hostId: t.hostId, timeoutMs: 12000 });
     if (response.result?.applied !== true) throw new Error('桌面未应用模型设置');
@@ -267,7 +271,19 @@ export class Bridge extends EventEmitter {
       { targetClientId: t.owner, hostId: t.hostId });
     const actual = read.result?.settings;
     if (actual?.model !== model || actual?.reasoningEffort !== effort) throw new Error('桌面模型设置尚未确认，请重新连接核对');
-    return { applied: true, model: actual.model, effort: actual.reasoningEffort, nextTurn: view.busy };
+    if(changeTier)await this.confirmServiceTier(id,serviceTier);
+    return { applied: true, model: actual.model, effort: actual.reasoningEffort,...serviceTierState(t.state),nextTurn: view.busy };
+  }
+  confirmServiceTier(id,expected,{timeoutMs=2000}={}) {
+    const confirmed=()=>{const value=serviceTierState(this.threads.get(id)?.state);return value.serviceTierKnown&&sameTier(value.serviceTier,expected);};
+    if(confirmed())return Promise.resolve();
+    return new Promise((resolve,reject)=>{
+      const cleanup=()=>{clearTimeout(timer);this.ipc.off('broadcast',changed);this.ipc.off('disconnected',disconnected);};
+      const changed=message=>{if(message.params?.conversationId===id&&confirmed()){cleanup();resolve();}};
+      const disconnected=()=>{cleanup();reject(new Error('桌面连接中断，加速设置尚未确认，请重新连接核对'));};
+      const timer=setTimeout(()=>{cleanup();reject(new Error('桌面加速设置尚未确认，请重新连接核对'));},timeoutMs);
+      this.ipc.on('broadcast',changed);this.ipc.on('disconnected',disconnected);
+    });
   }
   async respond(id, requestId, decision) {
     const t = this.writableThread(id);

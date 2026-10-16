@@ -1,6 +1,6 @@
-import { createReadTracker } from './read-state.js?v=28';
-import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=28';
-import {createNotifications,pendingKey} from './notifications.js?v=28';
+import { createReadTracker } from './read-state.js?v=29';
+import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=29';
+import {createNotifications,pendingKey} from './notifications.js?v=29';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -657,7 +657,7 @@ async function loadThreads(append = false) {
   const listScrollTop = $('threads').scrollTop;
   $('refresh-list').disabled = true;
   try {
-    const data = await api(`${activeProvider === 'codex' ? '/api/threads' : '/api/providers/' + activeProvider + '/threads'}?offset=${append ? threadNext || 0 : 0}&q=${encodeURIComponent(listQuery)}`);
+    const data = await api(`${activeProvider === 'codex' ? '/api/threads' : '/api/providers/' + activeProvider + '/threads'}?offset=${append ? threadNext || 0 : 0}&q=${encodeURIComponent(listQuery)}${activeProvider === 'codex' ? '&recentDays=7' : ''}`);
     if (generation !== listGeneration) return;
     lastListRead=Date.now();
     if (!append) $('threads').replaceChildren();
@@ -676,6 +676,11 @@ async function loadThreads(append = false) {
       paintThreadStatus(thread.id,recent.status,recent.completionKey,recent.completedAt,recent.availability,recent.pendingKey,recent.pendingVerified);
     }
     threadNext = data.next; $('more-threads').hidden = threadNext === null;
+    if (!append && !data.threads.length) {
+      const empty = document.createElement('p'); empty.className = 'picker-empty';
+      empty.textContent = listQuery ? '最近 7 天没有匹配的会话' : '最近 7 天没有会话';
+      $('threads').append(empty);
+    }
     $('threads').scrollTop = listScrollTop;
     if (!currentId && data.threads.length) {
       const saved = sessionStorage.getItem('rc_thread_' + activeProvider) || (activeProvider === 'codex' ? sessionStorage.getItem('rc_thread') : null);

@@ -17,7 +17,9 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
   const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
   db.exec(`CREATE TABLE threads (id TEXT PRIMARY KEY,name TEXT,title TEXT,cwd TEXT,updated_at INTEGER,model TEXT,
     archived INTEGER,agent_path TEXT,source TEXT,rollout_path TEXT)`);
-  db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, '集成测试', '集成测试', fixture, 1, 'test', 0, null, 'vscode', ''); db.close();
+  db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, '集成测试', '集成测试', fixture, 1, 'test', 0, null, 'vscode', '');
+  const recentId=randomUUID();
+  db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(recentId,'recent chat','recent chat',fixture,Math.floor(Date.now()/1000),'test',0,null,'vscode',''); db.close();
   const history = new DatabaseSync(join(fixture, 'thread_history_1.sqlite'));
   history.exec('CREATE TABLE thread_items (thread_id TEXT,turn_id TEXT,rollout_ordinal INTEGER,item_id TEXT,item_type TEXT,item_json TEXT,created_at_ms INTEGER)');
   history.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id, 'turn1', 1, 'u1', 'userMessage', JSON.stringify({ id: 'u1', type: 'userMessage', content: [{ type: 'text', text: '测试输入' }] }), 1700000000000); history.close();
@@ -79,6 +81,12 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     assert.equal((await fetch(url + '/api/quota')).status, 401);
     assert.equal((await fetch(url + '/api/quota', { headers: { Cookie: cookie } })).status, 503);
     assert.equal(status.features.openDesktop, false);
+    const recentList=await (await fetch(url+'/api/threads?recentDays=7',{headers:{Cookie:cookie}})).json();
+    assert.deepEqual(recentList.threads.map(t=>t.id),[recentId]);assert.equal(recentList.next,null);
+    const recentSearch=await (await fetch(url+'/api/threads?recentDays=7&q='+encodeURIComponent('集成测试'),{headers:{Cookie:cookie}})).json();
+    assert.equal(recentSearch.threads.length,0);
+    const referenceList=await (await fetch(url+'/api/threads',{headers:{Cookie:cookie}})).json();
+    assert.ok(referenceList.threads.some(t=>t.id===id),'reference picker can still find older chats');
     assert.equal((await fetch(url+'/api/thread-statuses',{method:'POST',headers:{Cookie:cookie},body:JSON.stringify({ids:[id]})})).status,403);
     const statusHeaders={Cookie:cookie,'X-CSRF-Token':status.csrf};
     assert.equal((await fetch(url+'/api/thread-statuses',{method:'POST',headers:statusHeaders,body:JSON.stringify({ids:Array(121).fill(id)})})).status,400);

@@ -188,7 +188,8 @@ async function handler(req, res) {
   }
   if (req.method === 'GET' && path === '/api/threads') {
     const offset = Math.max(0, Math.min(10000, Number(url.searchParams.get('offset')) || 0));
-    const threads = catalog.list({ offset, search: (url.searchParams.get('q') || '').slice(0, 80) });
+    const since = url.searchParams.get('recentDays') === '7' ? Date.now() - 7 * 86400000 : 0;
+    const threads = catalog.list({ offset, search: (url.searchParams.get('q') || '').slice(0, 80), since });
     const statuses=new Map(listStatus.read(threads.map(t=>t.id),{observe:false}).map(t=>[t.id,t]));
     for(const thread of threads)Object.assign(thread,statuses.get(thread.id));
     return json(res, 200, { threads, next: threads.length === 40 ? offset + 40 : null });

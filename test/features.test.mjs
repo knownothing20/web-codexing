@@ -75,6 +75,29 @@ test('chat list uses native activity recency instead of metadata update time', (
     assert.equal(list[1].updatedAt,1792014000000);
   } finally { catalog?.close(); clean(directory); }
 });
+test('recent chats filter before pagination and use activity time across timestamp formats', () => {
+  const directory=fixture(); let catalog;
+  const now=1792108800000, since=now-7*86400000;
+  try {
+    const db=new DatabaseSync(join(directory,'state_5.sqlite'));
+    db.exec('CREATE TABLE threads (id TEXT,name TEXT,title TEXT,cwd TEXT,model TEXT,archived INTEGER,agent_path TEXT,source TEXT,updated_at INTEGER,recency_at INTEGER,recency_at_ms INTEGER)');
+    const insert=db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?,?)');
+    insert.run('old','older chat','','project','test',0,null,'vscode',now/1000,null,since-1);
+    insert.run('boundary','boundary chat','','project','test',0,null,'vscode',1,null,since);
+    insert.run('newest','newest chat','','project','test',0,null,'vscode',1,null,now);
+    insert.run('seconds','seconds chat','','project','test',0,null,'vscode',1,(now-1000)/1000,null);
+    insert.run('legacy','legacy chat','','project','test',0,null,'vscode',(now-2000)/1000,null,null);
+    db.exec('ALTER TABLE threads ADD COLUMN rollout_path TEXT');
+    db.close(); catalog=new Catalog(directory);
+    assert.deepEqual(catalog.list({since,limit:2}).map(t=>t.id),['newest','seconds']);
+    assert.deepEqual(catalog.list({since,limit:2,offset:2}).map(t=>t.id),['legacy','boundary']);
+    assert.equal(catalog.list({since,offset:4}).length,0);
+    assert.equal(catalog.list({since,search:'older'}).length,0);
+    assert.equal(catalog.list({search:'older'})[0].id,'old');
+    assert.ok(catalog.get('old'),'older chats remain directly accessible');
+  } finally {catalog?.close();clean(directory);}
+});
+
 test('chat list reads each latest turn status and leaves absent status unknown',()=>{
   const directory=fixture();let catalog;
   try{

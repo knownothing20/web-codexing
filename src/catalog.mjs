@@ -42,12 +42,13 @@ export class Catalog {
     db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000;');
     return db;
   }
-  list({ offset = 0, limit = 40, search = '' } = {}) {
+  list({ offset = 0, limit = 40, search = '', since = 0 } = {}) {
     if (!this.state) return [];
     return this.state.prepare(`SELECT id, name, title, cwd, ${this.recencySql} AS list_recency, model FROM threads
       WHERE archived=0 AND (agent_path IS NULL OR agent_path='')
       AND source NOT LIKE '%subagent%' AND (name LIKE ? OR title LIKE ?)
-      ORDER BY list_recency DESC, id DESC LIMIT ? OFFSET ?`).all(`%${search}%`, `%${search}%`, limit, offset)
+      AND ${this.recencySql} >= ?
+      ORDER BY list_recency DESC, id DESC LIMIT ? OFFSET ?`).all(`%${search}%`, `%${search}%`, since, limit, offset)
       .map(r => { const turn=this.turnStatus?.get(r.id); return ({ id: r.id, title: (r.name || r.title || '未命名会话').split('\n')[0].slice(0, 100),
         project: r.cwd?.replace(/^\\\\\?\\/, '').split(/[\\/]/).filter(Boolean).at(-1) || '本机',
         updatedAt: r.list_recency, model: r.model || '',

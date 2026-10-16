@@ -13,7 +13,8 @@ const base = resolve('.local'); mkdirSync(base, { recursive: true });
 const fixture = mkdtempSync(join(base, 'ui-test-')), id = randomUUID(), pipe = '\\\\.\\pipe\\remote-coding-ui-' + randomUUID();
 const historicalMode=process.argv.includes('--history-notifications');
 const noticeMode=process.argv.includes('--notifications')||historicalMode;
-const statusMode=process.argv.includes('--status')||noticeMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
+const recentMode=process.argv.includes('--recent');
+const statusMode=process.argv.includes('--status')||noticeMode||recentMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
 const settingsMode=process.argv.includes('--settings');
 let ownerReads=0,fullFollows=0;const checkedIds=new Set();
@@ -23,6 +24,7 @@ db.exec('CREATE TABLE threads (id TEXT PRIMARY KEY,name TEXT,title TEXT,cwd TEXT
 db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, '手机问答验收 · 隔离测试', '手机问答验收 · 隔离测试', resolve('.'), Math.floor(Date.now()/1000), 'test', 0, null, 'vscode', '');
 if(statusMode)db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(otherId,'另一个会话 · 隔离测试','另一个会话 · 隔离测试',resolve('.'),Math.floor(Date.now()/1000)+5,'test',0,null,'vscode','');
 if(statusMode)db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(unloadedId,'尚未打开 · 隔离测试','尚未打开 · 隔离测试',resolve('.'),Math.floor(Date.now()/1000)-5,'test',0,null,'vscode','');
+if(recentMode)db.prepare('UPDATE threads SET updated_at=? WHERE id=?').run(Math.floor(Date.now()/1000)-8*86400,otherId);
 if(manyMode)for(let i=0;i<40;i++){const next=randomUUID();manyIds.add(next);db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(next,'列表性能测试 '+String(i+1).padStart(2,'0'),'列表性能测试',resolve('.'),Math.floor(Date.now()/1000)-10-i,'test',0,null,'vscode','');}
 db.close();
 const history = new DatabaseSync(join(fixture, 'thread_history_1.sqlite'));

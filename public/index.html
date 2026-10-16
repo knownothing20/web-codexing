@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#f7f8f5"><meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=28"><title>Remote Coding</title>
+  <link rel="stylesheet" href="/style.css?v=29"><title>Remote Coding</title>
 </head>
 <body>
   <section id="pair-view" class="pair-view">
@@ -23,8 +23,8 @@
       <div class="sidebar-brand"><div class="brand-mark small">⌘</div><div>Remote Coding<small>你的 Codex，随身连接</small></div><button id="close-sidebar" class="icon-button mobile-only" aria-label="关闭列表">×</button></div>
       <label class="provider-label" for="provider-select" hidden>软件</label><select id="provider-select" class="provider-select" aria-label="选择软件" hidden><option value="codex">Codex</option></select>
       <section class="device-card account-card" aria-label="账号与额度"><div class="device-top"><span id="device-dot" class="dot"></span><div class="device-identity"><strong id="device-name">Windows 电脑</strong><small id="device-status">正在连接</small></div><small id="quota-plan" class="quota-plan"></small><button id="refresh-quota" class="icon-button" aria-label="刷新账号额度" title="刷新账号额度">↻</button></div><div id="quota-windows" class="quota-windows"><small>正在读取额度…</small></div><small id="quota-updated" class="quota-updated" hidden>当前电脑登录的 Codex 账号</small></section>
-      <div class="list-heading"><span>会话</span><button id="refresh-list" class="icon-button" title="刷新会话" aria-label="刷新会话">↻</button></div>
-      <label class="search-box"><span>⌕</span><input id="search" placeholder="搜索会话" aria-label="搜索会话"></label>
+      <div class="list-heading"><span>最近 7 天</span><button id="refresh-list" class="icon-button" title="刷新会话" aria-label="刷新会话">↻</button></div>
+      <label class="search-box"><span>⌕</span><input id="search" placeholder="搜索最近 7 天会话" aria-label="搜索最近 7 天会话"></label>
       <nav id="threads" class="threads" aria-label="会话列表"></nav><button id="more-threads" class="text-button" hidden>加载更多会话</button>
       <div class="sidebar-footer"><span><span class="dot muted"></span> 局域网直连</span><button id="logout" class="text-button">退出配对</button></div>
     </aside>
@@ -93,5 +93,5 @@
       <p class="settings-foot">模型列表来自本机 Codex。实际可用性以执行结果为准。</p>
     </section>
   </div>
-  <script src="/app.js?v=28" type="module"></script>
+  <script src="/app.js?v=29" type="module"></script>
 </body></html>

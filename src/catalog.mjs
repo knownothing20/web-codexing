@@ -104,7 +104,7 @@ export class Catalog {
     }
     const hasMore = items.length > limit;
     const page = items.slice(0, limit).reverse();
-    return { messages: page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length),
+    return { messages: page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length || m?.videoSources?.length),
       cursor: hasMore ? page[0].rollout_ordinal : null };
   }
   legacyPage(row, before, limit) {
@@ -136,8 +136,11 @@ export class Catalog {
           if (!['user', 'assistant'].includes(p.role)) continue;
           const raw = (p.content || []).filter(c => ['input_text', 'output_text'].includes(c.type)).map(c => c.text).join('\n');
           const text = p.role === 'user' ? visibleUserText(raw) : raw;
-          if (text.startsWith('# AGENTS.md instructions') || text.startsWith('<environment_context>') || !text) continue;
-          found.push({ id: p.id || `legacy:${linePos}`, text, role: p.role, kind: 'message', phase: p.phase,
+          if (text.startsWith('# AGENTS.md instructions') || text.startsWith('<environment_context>')) continue;
+          const message=messageFromItem({...p,id:p.id||`legacy:${linePos}`,type:p.role==='user'?'userMessage':'agentMessage',text:raw,
+            content:[{type:'text',text:raw},...(p.content||[]).filter(c=>!['input_text','output_text'].includes(c.type))]});
+          if(!message.text&&!message.imageSources?.length&&!message.videoSources?.length)continue;
+          found.push({ ...message,
             at: e.timestamp ? Date.parse(e.timestamp) : null, timeSource: 'recorded', _pos: linePos });
         } catch { /* incomplete tail or non-message */ }
       }

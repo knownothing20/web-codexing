@@ -1,4 +1,4 @@
-import { imageSources } from './attachments.mjs';
+import { imageSources, videoSources } from './attachments.mjs';
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 
 export function applyPatches(state, patches) {
@@ -81,13 +81,13 @@ export function messageFromItem(item, turnId = '', index = 0) {
     const attachments = raw.trimStart().startsWith('# Files mentioned by the user:') ? [...raw.matchAll(/^## ([^\n]+?): [^\n]+$/gm)].map(m => m[1]).filter(name => name !== 'My request') : [];
     return { id, turnId, role: 'user', text: visibleUserText(references.length ? raw.slice(0, referenceAt) : raw), attachments, references,
       skills: (item.content || item.input || []).filter?.(c => c.type === 'skill').map(c => c.name) || [],
-      imageSources: imageSources(item, raw),
+      imageSources: imageSources(item, raw), videoSources: videoSources(item, raw),
       questionReply: raw.startsWith('<send_user_message_question_reply>'),
       guidance: item.type==='steeringUserMessage' && !raw.trimStart().startsWith('<send_user_message_question_reply>'), kind: 'message' };
   }
   if (item.type === 'agentMessage') {
     return { id, turnId, role: 'assistant', text: (item.text || '').replace(/:codex-annotation\{index="\d+"\}/g, ''), phase: item.phase || 'final_answer',
-      imageSources: imageSources(item, item.text || ''),
+      imageSources: imageSources(item, item.text || ''), videoSources: videoSources(item, item.text || ''),
       kind: item.questions?.length ? 'question' : 'message' };
   }
   if (item.type === 'error') return { id, turnId, role: 'system', text: item.message || item.error?.message || '执行发生错误', kind: 'error' };
@@ -107,7 +107,7 @@ export function messagesFromTurns(turns) {
       if (text) messages.unshift({ id: `input:${turn.turnId}`, turnId: turn.turnId, role: 'user', kind: 'message', text, at: turn.turnStartedAtMs || null, timeSource: 'turn' });
     }
     return messages;
-  }).filter(m => m.text || m.imageSources?.length);
+  }).filter(m => m.text || m.imageSources?.length || m.videoSources?.length);
   let question;
   for (const m of messages) {
     if (m.kind === 'question') { question = m; m.questionAnswered = false; }

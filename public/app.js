@@ -1,6 +1,6 @@
-import { createReadTracker } from './read-state.js?v=29';
-import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=29';
-import {createNotifications,pendingKey} from './notifications.js?v=29';
+import { createReadTracker } from './read-state.js?v=31';
+import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=31';
+import {createNotifications,pendingKey} from './notifications.js?v=31';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -26,6 +26,7 @@ function markCurrentCompletionRead() {
 }
 let selectedSkills = [], selectedThreads = [], pickerMode = 'skills', pickerItems = [], pickerNext = null, pickerGeneration = 0, requestSignature = '';
 let requestsNow = [], imageReturnFocus;
+let mediaItems=[],mediaIndex=0,mediaTouch=null;
 let desktopOpenAvailable = false, openingDesktop = false, desktopOpenTimer;
 let lastQuotaCheck = 0, quotaData;
 let activeProvider = 'codex', providerInfo = [];
@@ -283,23 +284,45 @@ function addTime(parent, message) {
   time.dateTime = new Date(Number(message.at)).toISOString(); parent.append(time);
 }
 function imageGallery(body, message) {
-  if (!message.images?.length) return;
+  const items=[...(message.images||[]).map(p=>({...p,kind:'image'})),...(message.videos||[]).map(p=>({...p,kind:'video'}))];
+  if (!items.length) return;
   const gallery = document.createElement('div'); gallery.className = 'image-gallery';
-  for (const picture of message.images) {
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'image-thumb'; button.setAttribute('aria-label', '放大图片：' + picture.name);
-    const img = document.createElement('img'); img.src = picture.url; img.alt = picture.name; img.loading = 'lazy'; img.decoding = 'async';
+  for (const [index,picture] of items.entries()) {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'image-thumb'+(picture.kind==='video'?' video-thumb':''); button.setAttribute('aria-label', (picture.kind==='video'?'播放视频：':'放大图片：') + picture.name);
     const caption = document.createElement('span'); caption.textContent = '点击放大';
-    img.onerror = () => { img.hidden = true; caption.textContent = '图片无法读取 · 点击重试'; };
+    if(picture.kind==='image') {
+      const img=document.createElement('img');img.src=picture.thumbnailUrl||picture.url;img.alt=picture.name;img.loading='lazy';img.decoding='async';
+      img.onerror=()=>{img.hidden=true;caption.textContent='缩略图不可用 · 点击查看原图';};button.append(img);
+    } else {
+      const cover=document.createElement('div');cover.className='video-cover';
+      const play=document.createElement('b');play.textContent='▶';
+      const title=document.createElement('strong');title.textContent=picture.name;
+      cover.append(play,title);button.append(cover);caption.textContent='点击播放 · 按需加载';
+    }
     button.onclick = () => {
-      imageReturnFocus = button; $('image-overlay').classList.remove('original-size'); $('image-size').textContent = '查看原图尺寸';
-      $('full-image').src = picture.url; $('full-image').alt = picture.name; $('image-caption').textContent = picture.name.startsWith('codex-clipboard-') ? '图片预览' : picture.name;
-      $('image-overlay').hidden = false; $('close-image').focus();
+      imageReturnFocus=button;mediaItems=items;mediaIndex=index;$('image-overlay').hidden=false;showMedia();$('close-image').focus();
     };
-    button.append(img, caption); gallery.append(button);
+    button.append(caption); gallery.append(button);
   }
   body.append(gallery);
 }
-function closeImage() { $('image-overlay').hidden = true; $('full-image').removeAttribute('src'); imageReturnFocus?.focus(); imageReturnFocus = null; }
+function stopMedia() { const video=$('full-video');video.pause();video.removeAttribute('src');video.load();$('full-image').removeAttribute('src'); }
+function showMedia() {
+  stopMedia();const item=mediaItems[mediaIndex];if(!item)return;
+  const isVideo=item.kind==='video';$('image-overlay').classList.remove('original-size');$('image-size').textContent='查看原图尺寸';$('image-size').hidden=isVideo;
+  $('full-image').hidden=isVideo;$('full-video').hidden=!isVideo;$('media-error').hidden=true;
+  $('media-counter').textContent=`${mediaIndex+1} / ${mediaItems.length}`;
+  $('media-prev').disabled=mediaIndex===0;$('media-next').disabled=mediaIndex===mediaItems.length-1;
+  $('media-prev').hidden=$('media-next').hidden=mediaItems.length<2;
+  $('image-caption').textContent=item.name.startsWith('codex-clipboard-')?'图片预览':item.name;
+  $('media-download').href=item.url+(isVideo?'?download=1':'');$('media-download').download=item.fileName||item.name;
+  if(isVideo) {
+    const video=$('full-video');video.src=item.url;
+    video.play().catch(err=>{if(err.name!=='AbortError'&&!video.hidden && video.getAttribute('src')===item.url){$('media-error').textContent=video.error?'此视频无法在当前浏览器播放，可以下载原文件查看。':'请点播放器的播放按钮开始播放；仍无法播放时可下载原文件。';$('media-error').hidden=false;}});
+  } else {$('full-image').src=item.url;$('full-image').alt=item.name;}
+}
+function changeMedia(step) { const next=mediaIndex+step;if(next<0||next>=mediaItems.length)return;mediaIndex=next;showMedia(); }
+function closeImage() { $('image-overlay').hidden=true;stopMedia();mediaItems=[];if(imageReturnFocus?.isConnected)imageReturnFocus.focus();imageReturnFocus=null; }
 function isAtBottom() { const s = $('message-scroll'); return s.scrollHeight - s.scrollTop - s.clientHeight < 100; }
 function updateJump() {
   const s = $('message-scroll');
@@ -399,8 +422,9 @@ function renderMessage(message) {
     if (message.attachments?.length) {
       const files = document.createElement('div'); files.className = 'attachment-chips';
       const images = message.attachments.filter(name => /\.(png|jpe?g|webp|gif)$/i.test(name)).length;
-      const other = message.attachments.length - images;
-      files.textContent = [images ? `▧ ${images} 张图片` : '', other ? `▤ ${other} 个附件` : ''].filter(Boolean).join(' · ');
+      const videos=message.attachments.filter(name=>/\.(mp4|m4v|webm|mov)$/i.test(name)).length;
+      const other = message.attachments.length - images - videos;
+      files.textContent = [images ? `▧ ${images} 张图片` : '',videos?`▷ ${videos} 个视频`:'', other ? `▤ ${other} 个附件` : ''].filter(Boolean).join(' · ');
       body.append(files);
     }
     // Compatibility with stored messages from an older bridge during a live upgrade.
@@ -411,7 +435,7 @@ function renderMessage(message) {
     body.append(document.createTextNode(text));
   } else {
     const text = message.text.replace(/:codex-annotation\{index="\d+"\}/g, '');
-    body.append(markdown(message.images?.length ? text.replace(/!\[[^\]]*\]\(<?(?:[A-Za-z]:[\\/]|\/)[^\n]*?\.(?:png|jpe?g|gif|webp)>?\)/gi, '') : text));
+    body.append(markdown(message.images?.length || message.videos?.length ? text.replace(/!?\[[^\]]*\]\(<?(?:[A-Za-z]:[\\/]|\/)[^\n]*?\.(?:png|jpe?g|gif|webp|mp4|m4v|webm|mov)>?\)/gi, '') : text));
   }
   if (message.phase === 'commentary') {
     const details = document.createElement('details'); details.className = 'progress-details';
@@ -931,6 +955,10 @@ let pickerSearchTimer;
 $('picker-search').oninput = () => { clearTimeout(pickerSearchTimer); if (pickerMode === 'skills') renderPicker(); else pickerSearchTimer = setTimeout(() => loadPicker(), 250); };
 $('close-image').onclick = closeImage;
 $('image-size').onclick = () => { const original = $('image-overlay').classList.toggle('original-size'); $('image-size').textContent = original ? '适应屏幕' : '查看原图尺寸'; };
+$('media-prev').onclick=()=>changeMedia(-1);$('media-next').onclick=()=>changeMedia(1);
+$('full-video').onerror=()=>{if(!$('full-video').getAttribute('src'))return;$('media-error').textContent='此视频无法播放，可能格式不兼容或原文件已删除。可以尝试下载原文件。';$('media-error').hidden=false;};
+$('full-image').addEventListener('touchstart',event=>{const point=event.touches[0];mediaTouch=point?{x:point.clientX,y:point.clientY}:null;},{passive:true});
+$('full-image').addEventListener('touchend',event=>{const point=event.changedTouches[0],start=mediaTouch;mediaTouch=null;if(!point||!start||$('image-overlay').classList.contains('original-size'))return;const dx=point.clientX-start.x,dy=point.clientY-start.y;if(Math.abs(dx)>60&&Math.abs(dx)>Math.abs(dy)*1.5)changeMedia(dx<0?1:-1);},{passive:true});
 $('image-overlay').onclick = event => { if (event.target === $('image-overlay')) closeImage(); };
 $('full-image').onerror = () => { $('image-caption').textContent = '原图片已删除或无法读取，请关闭后刷新会话重试'; };
 $('draft').oninput = () => { $('draft').style.height = 'auto'; $('draft').style.height = Math.min(140, $('draft').scrollHeight) + 'px'; updateComposer(); };
@@ -1019,8 +1047,9 @@ document.addEventListener('keydown', event => {
   const overlay = ['image-overlay', 'picker-overlay', 'settings-overlay','notifications-overlay'].map($).find(el => !el.hidden);
   if (!overlay) return;
   if (event.key === 'Escape') { if (overlay.id === 'image-overlay') closeImage(); else if (overlay.id === 'picker-overlay') closePicker(); else if(overlay.id==='notifications-overlay')closeNotices();else closeSettings(); }
+  if(overlay.id==='image-overlay' && $('full-video').hidden && ['ArrowLeft','ArrowRight'].includes(event.key)) {event.preventDefault();changeMedia(event.key==='ArrowLeft'?-1:1);}
   if (event.key === 'Tab') {
-    const controls = Array.from(overlay.querySelectorAll('button:not([disabled]),select:not([disabled]),input:not([disabled])')).filter(el => !el.hidden);
+    const controls = Array.from(overlay.querySelectorAll('button:not([disabled]),select:not([disabled]),input:not([disabled]),a[href],video[controls]')).filter(el => !el.hidden && el.getClientRects().length);
     const first = controls[0], last = controls.at(-1);
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -1050,7 +1079,7 @@ $('save-settings').onclick = async () => {
 };
 $('logout').onclick = async () => { try { await post('/api/logout', {}); sessionStorage.clear(); showPair(); } catch (err) { toast(err.message); } };
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { disconnect(); collapseNotice(); writable = false; updateComposer(); }
+  if (document.hidden) { if(!$('image-overlay').hidden)closeImage();disconnect(); collapseNotice(); writable = false; updateComposer(); }
   else if (csrf) { if (currentId) connectEvents(currentId, openGeneration); loadThreads(); loadQuota(); }
 });
 // Lightweight metadata only; no chat/history reload, including paginated lists.
@@ -1061,7 +1090,7 @@ setInterval(() => {
 setInterval(() => {
   if (!document.hidden && csrf && ($('sidebar').classList.contains('open') || window.matchMedia('(min-width: 721px)').matches)) loadQuota();
 }, 60000);
-window.addEventListener('pagehide', disconnect);
+window.addEventListener('pagehide', () => { stopMedia();disconnect(); });
 async function init() {
   const pairing = new URLSearchParams(location.hash.slice(1)).get('pair');
   if (pairing) {

@@ -65,7 +65,11 @@
 .image-overlay img{display:block;max-width:100%;max-height:calc(100dvh - 155px);object-fit:contain;border-radius:4px}
 .image-overlay p{font-size:11px;color:#d2ddcc;text-align:center;overflow-wrap:anywhere;margin:0;max-width:85%}
 .image-close{position:absolute;right:18px;top:max(18px,env(safe-area-inset-top));width:40px;height:40px;border:1px solid #a6baa155;border-radius:50%;font-size:26px;color:#fff;background:#ffffff14}
-.image-size{position:fixed;bottom:max(20px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);padding:10px 18px;border:1px solid #a6baa155;border-radius:24px;color:#fff;background:#29402c;font-size:12px;z-index:2}
+.media-toolbar{position:fixed;bottom:max(18px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:5px;padding:5px;border:1px solid #a6baa155;border-radius:26px;color:#fff;background:#29402c;z-index:2;white-space:nowrap;max-width:calc(100% - 20px)}
+.media-toolbar button,.media-toolbar a{min-height:42px;padding:10px;font-size:12px;color:#fff;text-decoration:none;display:flex;align-items:center;justify-content:center;border-radius:22px}.media-toolbar #media-prev,.media-toolbar #media-next{min-width:42px;font-size:27px;padding:0}.media-toolbar button:hover,.media-toolbar a:hover{background:#ffffff15}
+.media-counter{position:fixed;top:max(25px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);font-size:13px;color:#e1e9de;letter-spacing:2px}
+.video-thumb{grid-column:1/-1}.video-cover{height:130px;background:linear-gradient(135deg,#273e3e,#547b63);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;gap:12px;color:#fff}.video-cover b{display:grid;place-items:center;width:44px;height:44px;border:1px solid #ffffff65;border-radius:50%;background:#ffffff18;padding-left:3px;font-size:17px}.video-cover strong{font-size:11px;font-weight:400;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:100%}
+#full-video{width:min(960px,100%);max-height:65dvh;background:#000;border-radius:10px}.media-error{color:#f3d4a6!important;max-width:380px;line-height:1.8}
 .image-overlay.original-size{align-items:flex-start;justify-content:flex-start}
 .image-overlay.original-size img{max-width:none;max-height:none;width:auto;height:auto;flex-shrink:0}
 .image-overlay.original-size .image-close{position:fixed;z-index:2;background:#29402c}

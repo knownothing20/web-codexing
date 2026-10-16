@@ -22,7 +22,8 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
   db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(recentId,'recent chat','recent chat',fixture,Math.floor(Date.now()/1000),'test',0,null,'vscode',''); db.close();
   const history = new DatabaseSync(join(fixture, 'thread_history_1.sqlite'));
   history.exec('CREATE TABLE thread_items (thread_id TEXT,turn_id TEXT,rollout_ordinal INTEGER,item_id TEXT,item_type TEXT,item_json TEXT,created_at_ms INTEGER)');
-  history.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id, 'turn1', 1, 'u1', 'userMessage', JSON.stringify({ id: 'u1', type: 'userMessage', content: [{ type: 'text', text: '测试输入' }] }), 1700000000000); history.close();
+  const clipPath=join(fixture,'clip.mp4'),clipBytes=Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(100,1)]);writeFileSync(clipPath,clipBytes);
+  history.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id, 'turn1', 1, 'u1', 'userMessage', JSON.stringify({ id: 'u1', type: 'userMessage', content: [{ type: 'text', text: '测试输入' },{type:'localVideo',path:clipPath}] }), 1700000000000); history.close();
   const sockets = new Set(); let starts = 0, answered = 0,speedUpdates=0,serviceTier='priority';
   const fakeServer = net.createServer(socket => {
     sockets.add(socket); socket.on('close', () => sockets.delete(socket));
@@ -96,6 +97,13 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     response = await fetch(url + `/api/threads/${id}/open-desktop`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: '{}' }); assert.equal(response.status, 409);
     response = await fetch(url + `/api/threads/${id}/send`, { method: 'POST', headers: { Cookie: cookie }, body: '{}' }); assert.equal(response.status, 403);
     const page = await (await fetch(url + `/api/threads/${id}/history`, { headers: { Cookie: cookie } })).json(); assert.equal(page.messages[0].text, '测试输入');
+    const clip=page.messages[0].videos[0];assert.equal(JSON.stringify(page).includes(fixture),false);
+    assert.equal((await fetch(url+clip.url)).status,401);
+    assert.equal((await fetch(url+clip.url,{method:'HEAD'})).status,401);
+    const clipHead=await fetch(url+clip.url,{method:'HEAD',headers:{Cookie:cookie}});assert.equal(clipHead.status,200);assert.equal(Number(clipHead.headers.get('content-length')),clipBytes.length);
+    const chunk=await fetch(url+clip.url,{headers:{Cookie:cookie,Range:'bytes=4-11'}});
+    assert.equal(chunk.status,206);assert.equal(chunk.headers.get('accept-ranges'),'bytes');assert.deepEqual(Buffer.from(await chunk.arrayBuffer()),clipBytes.subarray(4,12));
+    assert.equal((await fetch(url+'/api/videos/'+ '0'.repeat(64),{headers:{Cookie:cookie}})).status,404);
     eventController = new AbortController();
     response = await fetch(url + `/api/threads/${id}/events`, { headers: { Cookie: cookie }, signal: eventController.signal });
     const reader = response.body.getReader(); let text = '';

@@ -155,7 +155,7 @@ export class Bridge extends EventEmitter {
     view.messages = view.messages.map(m => {
       const timed = t.timeCache.has(m.id) ? { ...m, at: t.timeCache.get(m.id), timeSource: 'recorded' } : m;
       if (this.images) return this.images.project(timed, t.id);
-      const { imageSources, ...publicMessage } = timed; return publicMessage;
+      const { imageSources, videoSources, ...publicMessage } = timed; return publicMessage;
     });
     return view;
   }

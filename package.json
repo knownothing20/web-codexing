@@ -21,6 +21,7 @@
     "preview:demo": "node scripts/preview-demo.mjs"
   },
   "dependencies": {
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.5"
   }
 }

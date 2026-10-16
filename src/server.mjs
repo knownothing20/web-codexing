@@ -11,7 +11,7 @@ import { Catalog } from './catalog.mjs';
 import { Bridge } from './bridge.mjs';
 import { getModels, getSkills } from './models.mjs';
 import { PairStore } from './pair-store.mjs';
-import { ImageStore } from './attachments.mjs';
+import { ImageStore, serveVideo } from './attachments.mjs';
 import { ClaudeChannels, WorkBuddy } from './providers.mjs';
 import { DesktopOpener } from './desktop-open.mjs';
 import { getQuota } from './quota.mjs';
@@ -102,7 +102,7 @@ async function handler(req, res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   if (!privateIp(req.socket.remoteAddress || '') || !validHost(req)) return json(res, 403, { error: '仅允许本机和局域网访问' });
   if (!sameOrigin(req)) return json(res, 403, { error: '禁止跨站访问' });
   const url = new URL(req.url, `${protocol}://${req.headers.host}`);
@@ -169,10 +169,10 @@ async function handler(req, res) {
   }
   const s = session(req);
   if (!s) return json(res, 401, { error: '请先与电脑配对' });
-  if (req.method !== 'GET' && req.headers['x-csrf-token'] !== s.csrf) return json(res, 403, { error: '会话校验失败，请刷新页面' });
+  if (!['GET','HEAD'].includes(req.method) && req.headers['x-csrf-token'] !== s.csrf) return json(res, 403, { error: '会话校验失败，请刷新页面' });
   if (req.method === 'GET' && path === '/api/status') return json(res, 200, {
     csrf: s.csrf, connected: !!ipc.clientId, computer: hostname(), authMode, remembered: !!s.remembered, transport: tls ? 'https' : 'lan-http',
-    features: { live: true, send: true, stop: true, approvals: true, userInput: true, images: true, skills: true, references: true, openDesktop: desktopOpener.enabled, create: false },
+    features: { live: true, send: true, stop: true, approvals: true, userInput: true, images: true, videos: true, skills: true, references: true, openDesktop: desktopOpener.enabled, create: false },
   });
   if (req.method === 'GET' && path === '/api/quota') {
     if (process.env.REMOTE_CODING_DISABLE_ACCOUNT_QUOTA === '1') return json(res, 503, { error: '测试环境未启用账号额度读取' });
@@ -263,10 +263,15 @@ async function handler(req, res) {
   }
   if (req.method === 'GET' && /^\/api\/images\/[0-9a-f]{64}$/.test(path)) {
     try {
-      const image = await images.read(path.split('/').at(-1));
+      const image = await (url.searchParams.get('size')==='thumb'?images.thumbnail(path.split('/').at(-1)):images.read(path.split('/').at(-1)));
       res.writeHead(200, { 'Content-Type': image.type, 'Cache-Control': 'private, max-age=300', 'Content-Length': image.bytes.length });
       return res.end(image.bytes);
     } catch (err) { return json(res, 404, { error: err.message }); }
+  }
+  if (['GET','HEAD'].includes(req.method) && /^\/api\/videos\/[0-9a-f]{64}$/.test(path)) {
+    try { await serveVideo(req,res,images,path.split('/').at(-1),{download:url.searchParams.get('download')==='1'}); }
+    catch(err){if(res.headersSent)res.destroy();else return json(res,404,{error:err.message});}
+    return;
   }
   const match = /^\/api\/threads\/([0-9a-f-]{36})\/(history|events|send|stop|approval|input|settings|skills|open-desktop)$/.exec(path);
   if (!match) return json(res, 404, { error: '接口不存在' });

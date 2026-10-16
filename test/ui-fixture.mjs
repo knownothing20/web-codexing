@@ -1,5 +1,5 @@
 // Disposable UI acceptance environment. No real Codex or provider task is submitted.
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, existsSync, writeFileSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { resolve, join } from 'node:path';
@@ -16,7 +16,8 @@ const noticeMode=process.argv.includes('--notifications')||historicalMode;
 const recentMode=process.argv.includes('--recent');
 const statusMode=process.argv.includes('--status')||noticeMode||recentMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
-const settingsMode=process.argv.includes('--settings');
+const mediaMode=process.argv.includes('--media');
+const settingsMode=process.argv.includes('--settings')||mediaMode;
 let ownerReads=0,fullFollows=0;const checkedIds=new Set();
 const metrics=()=>{if(manyMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows}));};
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
@@ -41,6 +42,24 @@ const otherState={id:otherId,title:'另一个会话 · 隔离测试',threadRunti
 const unloadedState={...otherState,id:unloadedId,title:'尚未打开 · 隔离测试'};
 const requestTemplate=structuredClone(state.requests);
 if(settingsMode){state.latestModel='demo-fast';state.latestReasoningEffort='high';state.latestThreadSettings={model:'demo-fast',serviceTier:'priority'};state.requests=[];state.threadRuntimeStatus={type:'idle'};state.turns[0].status='completed';}
+if(mediaMode){
+  const {default:sharp}=await import('sharp');
+  const photos=[];
+  for(const [i,color] of ['#547b63','#ae7851'].entries()){
+    const path=join(fixture,`photo-${i+1}.jpg`);
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000"><rect width="1600" height="1000" fill="${color}"/><circle cx="1230" cy="260" r="130" fill="#f4dfae"/><path d="M0 820 410 320 860 820 1180 510 1600 920V1000H0" fill="#1e3a34"/><text x="90" y="145" font-family="sans-serif" font-size="44" fill="white">MOBILE PREVIEW / 0${i+1}</text><text x="90" y="930" font-family="sans-serif" font-size="92" fill="white">${i===0?'MOUNTAINS':'SUNSET'}</text></svg>`;
+    await sharp(Buffer.from(svg)).jpeg({quality:92}).toFile(path);photos.push(path);
+  }
+  const clip=join(fixture,'preview.mp4');
+  // Only this optional developer fixture needs ffmpeg; the shipped server never transcodes.
+  execFileSync('ffmpeg',['-y','-f','lavfi','-i','testsrc2=size=640x360:rate=12','-t','3','-c:v','libx264','-pix_fmt','yuv420p','-movflags','+faststart',clip],{windowsHide:true,stdio:'ignore'});
+  state.title='图片与视频 · 手机预览';state.turns[0].items=[
+    {id:'u',type:'userMessage',content:[{type:'text',text:'这两张图片和演示视频，手机上能直接查看吗？'}]},
+    {id:'media-answer',type:'agentMessage',phase:'final_answer',text:`可以。图片点开放大，左右切换；视频点击后才加载播放。\n\n![山景](${photos[0]})\n![日落](${photos[1]})\n[演示视频](${clip})\n\n文件留在电脑，手机按需查看。`}
+  ];
+  const d=new DatabaseSync(join(fixture,'state_5.sqlite'));d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);d.close();
+  const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,'turn',2,'media-answer','agentMessage',JSON.stringify(state.turns[0].items[1]),Date.now());h.close();
+}
 if(statusMode){state.threadRuntimeStatus={type:'idle'};state.turns[0].status='interrupted';}
 if(noticeMode){
   state.title='正在编写的会话';state.requests=[];state.turns[0].status='inProgress';state.threadRuntimeStatus={type:'active'};
@@ -106,6 +125,11 @@ console.log(JSON.stringify({url:`http://127.0.0.1:${runtime.port}/`,pairCode:run
 let stopping=false;
 async function stop(){if(stopping)return;stopping=true;const exited=child.exitCode===null?new Promise(resolve=>child.once('exit',resolve)):Promise.resolve();child.kill();for(const s of sockets)s.destroy();await exited; await new Promise(resolve=>fake.close(resolve));if(!resolve(fixture).startsWith(base+'\\'))throw new Error('unsafe fixture cleanup');rmSync(fixture,{recursive:true,force:true,maxRetries:10,retryDelay:50});process.exit(0);}
 const command = line => {
+  if(mediaMode&&line.trim()==='media-error'){
+    const path=join(fixture,'unsupported.mp4');writeFileSync(path,Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(128)]));
+    state.turns[0].items.push({id:'bad-media',type:'agentMessage',phase:'final_answer',text:`[格式测试视频](${path})`});
+    for(const socket of sockets)broadcast(socket);
+  }
   if(line.trim()==='notice-waiting'||line.trim()==='notice-complete'){
     const waiting=line.trim()==='notice-waiting';
     otherState.requests=waiting?structuredClone(requestTemplate):[];

@@ -11,6 +11,20 @@ import {conversationStatus} from '../src/state.mjs';
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const questionState=()=>({id:'chat',requests:[{id:'request',method:'item/tool/requestUserInput',params:{questions:[]}}],turns:[{turnId:'turn',status:'interrupted',items:[]}]});
 
+test('a replaced native question pushes a new attention identity even when pending count stays the same',async()=>{
+ const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
+ const service=new ListStatus(bridge,{statusRecords:()=>[{id:'chat',status:'stopped',stamp:'same',pendingIds:[]}]});
+ const changes=[];service.on('change',rows=>changes.push(rows[0]));
+ try {
+  service.read(['chat'],{observe:false});
+  bridge.emit('thread-status',{id:'chat',status:'waiting',availability:'ready',pendingCount:1,requestIds:['first'],resumeStatus:'stopped'});
+  await new Promise(resolve=>setTimeout(resolve,40));
+  bridge.emit('thread-status',{id:'chat',status:'waiting',availability:'ready',pendingCount:1,requestIds:['second'],resumeStatus:'stopped'});
+  await new Promise(resolve=>setTimeout(resolve,40));
+  assert.equal(changes.length,2);assert.notEqual(changes[0].pendingKey,changes[1].pendingKey);
+ }finally{service.close();}
+});
+
 test('pending operations override stopped/completed state and acknowledged operations restore actual state',()=>{
  const state=questionState(),ipc=new EventEmitter();ipc.clientId='client';
  const bridge=new Bridge(ipc,{});ipc.close=()=>{};

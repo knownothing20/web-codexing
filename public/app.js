@@ -1,5 +1,6 @@
-import { createReadTracker } from './read-state.js?v=26';
-import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=26';
+import { createReadTracker } from './read-state.js?v=27';
+import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=27';
+import {createNotifications,pendingKey} from './notifications.js?v=27';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -13,9 +14,12 @@ let displayedCompletionKey = null;
 let browserStorage;
 try { browserStorage=localStorage; } catch { browserStorage={getItem:()=>null,setItem:()=>{}}; }
 const readTracker=createReadTracker(browserStorage);
+const notices=createNotifications(browserStorage),threadTitles=new Map();
+let bubbleTimer,bubbleId,noticeJump,noticeListSignature='';
 function markCurrentCompletionRead() {
   if (!currentId || !displayedCompletionKey || document.hidden || $('sidebar').classList.contains('open') || !isAtBottom()) return;
   readTracker.markRead(currentId,displayedCompletionKey);
+  notices.read(currentId);renderNotices();
   const actual=threadStatuses.get(currentId);
   paintThreadStatus(currentId,actual?.status || 'idle',displayedCompletionKey,actual?.completedAt,actual?.availability);
 }
@@ -109,6 +113,7 @@ function banner(text) { $('banner').textContent = text || ''; $('banner').hidden
 function showPair() {
   disconnect(); $('pair-view').hidden = false; $('workspace').hidden = true;
   csrf = null; writable = false; currentId = null; messageMap.clear(); messageNodes.clear(); messageOrder = [];
+  notices.reset();collapseNotice();$('notifications-overlay').hidden=true;renderNotices();
   $('messages').replaceChildren(); $('draft').value = ''; drafts.clear();
   contexts.clear(); inputDrafts.clear(); inputStates.clear(); selectedSkills = []; selectedThreads = []; renderContext();
   quotaData = null; lastQuotaCheck = 0; $('quota-windows').textContent = '连接后读取额度'; $('quota-updated').textContent = '当前电脑登录的 Codex 账号';
@@ -119,6 +124,79 @@ function setSidebar(open) {
   if (open && csrf) { loadThreads(); loadQuota(); }
   if (!open) requestAnimationFrame(markCurrentCompletionRead);
 }
+function collapseNotice() { clearTimeout(bubbleTimer); bubbleId=null; $('notice-bubble').hidden=true; }
+function noticeVisible(id) {
+  return id===currentId&&!document.hidden&&!$('sidebar').classList.contains('open')&&isAtBottom();
+}
+function observeNotice(row) {
+  if(activeProvider!=='codex')return;
+  const fresh=notices.observe(row,{visible:noticeVisible(row.id)});
+  if(fresh) {
+    bubbleId=notices.list()[0]?.id;
+    clearTimeout(bubbleTimer);bubbleTimer=setTimeout(collapseNotice,7000);
+    $('notice-announcement').textContent=(row.status==='waiting'?'有会话需要你处理：':'有会话已完成：')+row.title;
+  }
+  renderNotices();
+}
+function renderNotices() {
+  const items=notices.list(),count=items.length,waiting=items.filter(n=>n.kind==='waiting').length;
+  $('notice-count').hidden=!count;$('notice-count').textContent=count>9?'9+':count;
+  $('open-notifications').classList.toggle('has-waiting',waiting>0);
+  $('open-notifications').setAttribute('aria-label',count?`会话提示，${waiting} 条待操作，${count-waiting} 条已完成`:'会话提示，无新提示');
+  const bubble=items.find(n=>n.id===bubbleId);
+  $('notice-bubble').hidden=!bubble;
+  if(bubble) {
+    $('notice-bubble').classList.toggle('waiting',bubble.kind==='waiting');
+    $('notice-symbol').textContent=bubble.kind==='waiting'?'◐':'✓';
+    $('notice-title').textContent=bubble.title;
+    $('notice-description').textContent=bubble.kind==='waiting'?'需要你处理 · 点此跳转':'任务已完成 · 点此查看';
+    $('notice-jump').setAttribute('aria-label',`查看${bubble.kind==='waiting'?'待操作':'已完成'}会话：${bubble.title}`);
+    $('notice-all').hidden=count<2;$('notice-all').textContent=`全部 ${count}`;
+  }
+  if($('notifications-overlay').hidden)return;
+  const signature=JSON.stringify(items);
+  if(signature===noticeListSignature)return;
+  noticeListSignature=signature;
+  $('notification-list').replaceChildren();$('notification-empty').hidden=!!count;
+  $('clear-completed').hidden=!items.some(n=>n.kind==='complete');
+  for(const item of items) {
+    const row=document.createElement('div');row.className='notification-row '+item.kind;
+    const jump=document.createElement('button');jump.className='notification-target';
+    const icon=document.createElement('span');icon.className='notice-symbol';icon.textContent=item.kind==='waiting'?'◐':'✓';icon.setAttribute('aria-hidden','true');
+    const text=document.createElement('span'),title=document.createElement('strong'),meta=document.createElement('small');
+    title.textContent=item.title;
+    meta.textContent=(item.kind==='waiting'?'待操作':'已完成')+' · '+new Date(item.at).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})+(item.availability==='notLoaded'?' · 电脑未加载':'');
+    text.append(title,meta);jump.append(icon,text);jump.onclick=()=>jumpToNotice(item);
+    const dismiss=document.createElement('button');dismiss.className='notice-close';dismiss.textContent='×';dismiss.setAttribute('aria-label','忽略提示：'+item.title);
+    dismiss.onclick=()=>{notices.dismiss(item.id);if(bubbleId===item.id)collapseNotice();renderNotices();};
+    row.append(jump,dismiss);$('notification-list').append(row);
+  }
+}
+function openNotices() { collapseNotice();$('notifications-overlay').hidden=false;noticeListSignature='';renderNotices();$('close-notifications').focus(); }
+function closeNotices() { $('notifications-overlay').hidden=true;$('open-notifications').focus(); }
+function revealNotice() {
+  if(noticeJump?.id!==currentId)return;
+  const target=noticeJump.kind==='waiting'&&$('requests').childElementCount?$('requests'):null;
+  if(target)target.scrollIntoView({block:'center'});
+  else $('message-scroll').scrollTop=$('message-scroll').scrollHeight;
+  if(noticeJump.kind!=='waiting'||target)noticeJump=null;
+  requestAnimationFrame(markCurrentCompletionRead);
+}
+async function jumpToNotice(item) {
+  $('notifications-overlay').hidden=true;collapseNotice();noticeJump={id:item.id,kind:item.kind};
+  if(currentId!==item.id)await openThread(item.id,item.title);
+  revealNotice();
+}
+$('open-notifications').onclick=$('notice-all').onclick=openNotices;
+$('close-notifications').onclick=closeNotices;
+$('notifications-overlay').onclick=event=>{if(event.target===$('notifications-overlay'))closeNotices();};
+$('collapse-notice').onclick=collapseNotice;
+$('notice-jump').onclick=()=>{const item=notices.list().find(n=>n.id===bubbleId);if(item)jumpToNotice(item);};
+$('clear-completed').onclick=()=>{notices.clearCompleted();renderNotices();};
+// A delayed connection must not scroll after the user has resumed typing/reading.
+$('draft').addEventListener('pointerdown',()=>{noticeJump=null;});
+$('draft').addEventListener('input',()=>{noticeJump=null;});
+$('message-scroll').addEventListener('pointerdown',()=>{noticeJump=null;});
 function quotaWindowName(window) {
   const minutes = window.minutes;
   if (minutes === 10080) return '每周额度';
@@ -580,6 +658,7 @@ async function loadThreads(append = false) {
     lastListRead=Date.now();
     if (!append) $('threads').replaceChildren();
     for (const thread of data.threads) {
+      threadTitles.set(thread.id,thread.title);if(threadTitles.size>500)threadTitles.delete(threadTitles.keys().next().value);
       const button = document.createElement('button'); button.className = 'thread-row' + (thread.id === currentId ? ' selected' : ''); button.dataset.id = thread.id;
       const title = document.createElement('strong'); title.textContent = thread.title;
       const meta = document.createElement('small'), project = document.createElement('span'), time = document.createElement('time');
@@ -604,12 +683,14 @@ async function loadThreads(append = false) {
   } catch (err) { toast(err.message); if (activeProvider !== 'codex') renderIntegration(err.message); }
   finally { if (generation === listGeneration) $('refresh-list').disabled = false; }
 }
-function paintThreadStatus(id,status,completionKey,completedAt,availability) {
+function paintThreadStatus(id,status,completionKey,completedAt,availability,attention) {
   availability=availability ?? threadStatuses.get(id)?.availability ?? 'unknown';
-  threadStatuses.set(id,{status,completionKey,completedAt,availability});
+  attention=attention??threadStatuses.get(id)?.pendingKey;
+  threadStatuses.set(id,{status,completionKey,completedAt,availability,pendingKey:attention});
   if(threadStatuses.size>500)threadStatuses.delete(threadStatuses.keys().next().value);
   if(completionKey!==undefined) threadCompletion.set(id,completionKey);
   const unread=readTracker.observe(id,{status,completionKey:threadCompletion.get(id),completedAt});
+  observeNotice({id,title:threadTitles.get(id)|| (id===currentId?$('thread-title').textContent:'未命名会话'),status,completionKey:threadCompletion.get(id),unread,availability,pendingKey:attention});
   if(unread)status='unread';
   const row=[...$('threads').children].find(el=>el.dataset.id===id);if(!row)return;
   let loadBadge=row.querySelector('.thread-availability');
@@ -662,10 +743,21 @@ function connectEvents(id, generation) {
   source.onmessage = event => {
     if (generation !== openGeneration) return;
     const data = JSON.parse(event.data);
+    if(data.type==='activity') {
+      for(const row of data.threads || []) {
+        threadTitles.set(row.id,row.title);
+        liveStatusAt.set(row.id,Date.now());
+        if(threadTitles.size>500)threadTitles.delete(threadTitles.keys().next().value);
+        if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
+        paintThreadStatus(row.id,row.status,row.completionKey,row.completedAt,row.availability,row.pendingKey);
+      }
+      for(const removed of data.removedIds || [])notices.remove(removed);
+      renderNotices();return;
+    }
     if(data.type==='list-status') {
-      if(activeProvider==='codex'&&listIsVisible())for(const row of data.threads || []) {
+      if(activeProvider==='codex')for(const row of data.threads || []) {
         liveStatusAt.set(row.id,Date.now());if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
-        paintThreadStatus(row.id,row.status,row.completionKey,row.completedAt,row.availability);
+        paintThreadStatus(row.id,row.status,row.completionKey,row.completedAt,row.availability,row.pendingKey);
       }
       return;
     }
@@ -707,10 +799,12 @@ function connectEvents(id, generation) {
       renderRequests(data.requests); updateComposer();
       displayedCompletionKey=data.completionKey || null;
       liveStatusAt.set(id,Date.now());if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
-      paintThreadStatus(id,status,displayedCompletionKey,data.completedAt,'ready');
+      threadTitles.set(id,data.title || $('thread-title').textContent);
+      paintThreadStatus(id,status,displayedCompletionKey,data.completedAt,'ready',pendingKey((data.requests || []).map(r=>r.id)));
       if (followBottom) $('message-scroll').scrollTop = $('message-scroll').scrollHeight;
       else if (data.type === 'update' && data.messages?.length) hasUnread = true;
       requestAnimationFrame(markCurrentCompletionRead);
+      if(noticeJump?.id===id)requestAnimationFrame(revealNotice);
       updateJump(); return;
     }
     if (data.type === 'error') toast(data.message);
@@ -725,6 +819,7 @@ async function openThread(id, title) {
   clearTimeout(desktopOpenTimer);
   if (currentId) { drafts.set(currentId, $('draft').value); saveContext(); }
   currentId = id; const generation = ++openGeneration; disconnect();
+  if(noticeJump?.id!==id)noticeJump=null;
   displayedCompletionKey=null;
   expandFromId = loadExpansion(id); olderOutsideRange = new Set(); manualProgress.clear();
   selectedSkills = contexts.get(id)?.skills || []; selectedThreads = contexts.get(id)?.threads || []; renderContext();
@@ -774,6 +869,7 @@ function renderIntegration(error = '') {
 async function changeProvider(provider) {
   if (currentId) { drafts.set(currentId, $('draft').value); saveContext(); }
   disconnect(); ++openGeneration; activeProvider = provider; sessionStorage.setItem('rc_provider', provider);
+  notices.reset();collapseNotice();renderNotices();
   currentId = null; writable = false; busy = false; sending = false; uncertain = false; listQuery = ''; $('search').value = '';
   currentModel = ''; currentEffort = ''; $('model-label').textContent = providerNames[provider];
   selectedSkills = []; selectedThreads = []; renderContext(); messageMap.clear(); messageNodes.clear(); messageOrder = []; requestsNow = []; requestSignature = '';
@@ -908,9 +1004,9 @@ $('fast-mode').onchange=()=>{speedDirty=true;populateSpeed();};
 $('close-settings').onclick = closeSettings;
 $('settings-overlay').onclick = event => { if (event.target === $('settings-overlay')) closeSettings(); };
 document.addEventListener('keydown', event => {
-  const overlay = ['image-overlay', 'picker-overlay', 'settings-overlay'].map($).find(el => !el.hidden);
+  const overlay = ['image-overlay', 'picker-overlay', 'settings-overlay','notifications-overlay'].map($).find(el => !el.hidden);
   if (!overlay) return;
-  if (event.key === 'Escape') { if (overlay.id === 'image-overlay') closeImage(); else if (overlay.id === 'picker-overlay') closePicker(); else closeSettings(); }
+  if (event.key === 'Escape') { if (overlay.id === 'image-overlay') closeImage(); else if (overlay.id === 'picker-overlay') closePicker(); else if(overlay.id==='notifications-overlay')closeNotices();else closeSettings(); }
   if (event.key === 'Tab') {
     const controls = Array.from(overlay.querySelectorAll('button:not([disabled]),select:not([disabled]),input:not([disabled])')).filter(el => !el.hidden);
     const first = controls[0], last = controls.at(-1);
@@ -942,7 +1038,7 @@ $('save-settings').onclick = async () => {
 };
 $('logout').onclick = async () => { try { await post('/api/logout', {}); sessionStorage.clear(); showPair(); } catch (err) { toast(err.message); } };
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { disconnect(); writable = false; updateComposer(); }
+  if (document.hidden) { disconnect(); collapseNotice(); writable = false; updateComposer(); }
   else if (csrf) { if (currentId) connectEvents(currentId, openGeneration); loadThreads(); loadQuota(); }
 });
 // Lightweight metadata only; no chat/history reload, including paginated lists.

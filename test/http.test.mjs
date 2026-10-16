@@ -70,7 +70,7 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     const runtime = JSON.parse(readFileSync(runtimePath, 'utf8'));
     const url = `http://127.0.0.1:${runtime.port}`;
     let response = await fetch(url + '/api/threads'); assert.equal(response.status, 401);
-    const tierModule=await fetch(url+'/service-tier.js?v=26');assert.equal(tierModule.status,200);assert.match(tierModule.headers.get('content-type'),/javascript/);
+    for(const name of ['service-tier.js','notifications.js']){const module=await fetch(url+'/'+name+'?v=27');assert.equal(module.status,200);assert.match(module.headers.get('content-type'),/javascript/);}
     response = await fetch(url + '/api/local/status'); assert.equal(response.status, 403);
     response = await fetch(url + '/api/pair', { method: 'POST', headers: { Origin: 'http://evil.test' }, body: '{}' }); assert.equal(response.status, 403);
     response = await fetch(url + '/api/pair', { method: 'POST', body: JSON.stringify({ code: runtime.pairCode }) }); assert.equal(response.status, 200);

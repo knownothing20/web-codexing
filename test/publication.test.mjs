@@ -88,6 +88,9 @@ test('public demo serves only synthetic data and never submits actions', async (
   try {
     assert.match(await (await fetch(base+'/')).text(),/公开演示/);
     assert.equal((await fetch(base+'/read-state.js')).status,200);
+    for(const module of ['service-tier.js','notifications.js']) {
+      const asset=await fetch(base+'/'+module);assert.equal(asset.status,200);assert.match(asset.headers.get('content-type'),/javascript/);
+    }
     assert.equal((await (await fetch(base+'/api/status')).json()).computer,'演示电脑 · DEMO');
     assert.equal((await fetch(base+'/api/threads/demo-chat/send',{method:'POST',body:'{}'})).status,409);
     assert.equal((await fetch(base+'/runtime.json')).status,404);

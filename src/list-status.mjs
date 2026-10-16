@@ -1,4 +1,5 @@
 import {EventEmitter} from 'node:events';
+import {pendingKey} from '../public/notifications.js';
 
 // Visible rows request observation. Cheap owner checks and full snapshots share
 // two workers, but use separate budgets. There is no autonomous polling timer.
@@ -16,7 +17,7 @@ export class ListStatus extends EventEmitter {
       const previous=this.cache.get(value.id)?.value,previousOwner=this.owners.get(value.id)?.value;
       this.bump(value.id);this.put(this.owners,value.id,{value:'ready',at:this.now()});
       this.put(this.cache,value.id,{stamp:this.recordStamps.get(value.id),observedAt:this.now(),until:this.now()+5000,value});
-      if(previousOwner!=='ready'||previous?.status!==value.status||previous?.pendingCount!==value.pendingCount||previous?.completionKey!==value.completionKey)this.notify(value.id);
+      if(previousOwner!=='ready'||previous?.status!==value.status||previous?.pendingCount!==value.pendingCount||previous?.completionKey!==value.completionKey||pendingKey(previous?.requestIds)!==pendingKey(value.requestIds))this.notify(value.id);
     };
     this.availability=value=>{
       if(!this.records.has(value.id))return;
@@ -73,7 +74,8 @@ export class ListStatus extends EventEmitter {
     const availability=!this.bridge.ipc.clientId?'offline':attached?'ready':owner&&now-owner.at<15000?owner.value:'unknown';
     let status=live?.status||(pending.length?'waiting':row.status);
     if(status==='running'&&['offline','notLoaded'].includes(availability))status=availability;
-    return {id:row.id,status,availability,pendingCount:live?.pendingCount??pending.length,
+    const requests=(live?.requestIds || pending).filter(id=>!this.bridge.acceptedRequests.has(row.id+':'+id));
+    return {id:row.id,status,availability,pendingCount:live?.pendingCount??pending.length,pendingKey:requests.length?pendingKey(requests):null,
       completionKey:live?.completionKey!==undefined?live.completionKey:row.completionKey,completedAt:row.completedAt,updatedAt:row.updatedAt};
   }
   notify(id) {

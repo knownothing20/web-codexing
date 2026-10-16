@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#f7f8f5"><meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=26"><title>Remote Coding</title>
+  <link rel="stylesheet" href="/style.css?v=27"><title>Remote Coding</title>
 </head>
 <body>
   <section id="pair-view" class="pair-view">
@@ -31,8 +31,11 @@
     <main class="main">
       <header class="chat-header"><button id="open-sidebar" class="icon-button mobile-only" aria-label="打开会话列表">☰</button>
         <div class="chat-title"><h2 id="thread-title">选择一个会话</h2><div><span id="connection-dot" class="dot muted"></span><span id="connection-label">从左侧选择电脑上的聊天</span></div></div>
+        <button id="open-notifications" class="icon-button notice-bell" title="会话提示" aria-label="会话提示，无新提示" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span id="notice-count" hidden></span></button>
         <button id="reconnect" class="icon-button" title="重新连接当前会话" aria-label="重新连接当前会话">↻</button>
       </header>
+      <div class="notice-lane"><div id="notice-bubble" class="notice-bubble" hidden><span id="notice-symbol" class="notice-symbol" aria-hidden="true">◐</span><button id="notice-jump" class="notice-jump"><strong id="notice-title"></strong><small id="notice-description"></small></button><button id="notice-all" class="notice-all" hidden></button><button id="collapse-notice" class="notice-close" aria-label="收起气泡，保留提示">×</button></div></div>
+      <span id="notice-announcement" class="sr-only" role="status" aria-live="polite"></span>
       <div id="banner" class="banner" hidden></div>
       <div id="offline-panel" class="offline-panel" hidden><strong id="offline-title">Codex 暂未连接</strong><span id="offline-description">历史仍可查看，草稿可以保留。连接恢复后再发送。</span><button id="open-desktop" hidden title="会切换电脑上的 Codex 窗口到这条会话">在电脑打开并连接</button><button id="retry-connection" class="text-button">重新连接</button></div>
       <section id="integration-panel" class="integration-panel" hidden><span class="eyebrow">连接电脑端软件</span><h2 id="integration-title"></h2><p id="integration-description"></p><ol id="integration-steps" hidden></ol><p id="integration-note"></p><a id="integration-docs" target="_blank" rel="noopener noreferrer">查看官方连接说明 ↗</a><button id="refresh-provider" class="text-button">刷新连接状态</button></section>
@@ -52,6 +55,16 @@
       </div><div class="composer-note"><span id="draft-note">消息会交给当前桌面会话执行</span><span id="char-count"></span></div></div>
       <div id="toast" class="toast" role="status" hidden></div>
     </main>
+  </div>
+  <div id="notifications-overlay" class="settings-overlay" hidden>
+    <section class="settings-panel notifications-panel" role="dialog" aria-modal="true" aria-labelledby="notifications-title">
+      <div class="settings-heading"><div><span class="eyebrow">STAY IN THE LOOP</span><h2 id="notifications-title">会话提示</h2></div><button id="close-notifications" class="icon-button" aria-label="关闭会话提示">×</button></div>
+      <p class="settings-intro">待操作优先。点会话跳转，草稿会保留。</p>
+      <div id="notification-list" class="notification-list"></div>
+      <p id="notification-empty" class="notification-empty">暂时没有新提示，安心做手上的事。</p>
+      <button id="clear-completed" class="text-button" hidden>清除已完成提示</button>
+      <p class="settings-foot">网页前台连接时接收最近 40 条会话的状态。后台不发送系统通知。</p>
+    </section>
   </div>
   <div id="image-overlay" class="image-overlay" hidden role="dialog" aria-modal="true" aria-label="图片预览"><button id="close-image" class="image-close" aria-label="关闭图片预览">×</button><img id="full-image" alt=""><p id="image-caption"></p><button id="image-size" class="image-size">查看原图尺寸</button></div>
   <div id="picker-overlay" class="settings-overlay" hidden>
@@ -80,5 +93,5 @@
       <p class="settings-foot">模型列表来自本机 Codex。实际可用性以执行结果为准。</p>
     </section>
   </div>
-  <script src="/app.js?v=26" type="module"></script>
+  <script src="/app.js?v=27" type="module"></script>
 </body></html>

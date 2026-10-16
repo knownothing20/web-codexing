@@ -11,7 +11,8 @@ import {catalogFixture} from './catalog-fixture.mjs';
 
 const base = resolve('.local'); mkdirSync(base, { recursive: true });
 const fixture = mkdtempSync(join(base, 'ui-test-')), id = randomUUID(), pipe = '\\\\.\\pipe\\remote-coding-ui-' + randomUUID();
-const statusMode=process.argv.includes('--status'),otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
+const noticeMode=process.argv.includes('--notifications');
+const statusMode=process.argv.includes('--status')||noticeMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
 const settingsMode=process.argv.includes('--settings');
 let ownerReads=0,fullFollows=0;const checkedIds=new Set();
@@ -38,6 +39,14 @@ const unloadedState={...otherState,id:unloadedId,title:'尚未打开 · 隔离�
 const requestTemplate=structuredClone(state.requests);
 if(settingsMode){state.latestModel='demo-fast';state.latestReasoningEffort='high';state.latestThreadSettings={model:'demo-fast',serviceTier:'priority'};state.requests=[];state.threadRuntimeStatus={type:'idle'};state.turns[0].status='completed';}
 if(statusMode){state.threadRuntimeStatus={type:'idle'};state.turns[0].status='interrupted';}
+if(noticeMode){
+  state.title='正在编写的会话';state.requests=[];state.turns[0].status='inProgress';state.threadRuntimeStatus={type:'active'};
+  otherState.title='旅行手册 · 演示任务';otherState.turns[0].status='inProgress';otherState.threadRuntimeStatus={type:'active'};
+  const d=new DatabaseSync(join(fixture,'state_5.sqlite'));
+  d.prepare('UPDATE threads SET name=?,title=?,updated_at=? WHERE id=?').run(state.title,state.title,Math.floor(Date.now()/1000)+10,id);
+  d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(otherState.title,otherState.title,otherId);d.close();
+  const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.prepare('UPDATE thread_turns SET status=?').run('inProgress');h.close();
+}
 const broadcast = (socket,conversationId=id) => socket.write(frame({type:'broadcast',method:'thread-stream-state-changed',version:11,sourceClientId:'fixture-owner',params:{conversationId,hostId:'local',change:{type:'snapshot',revision:revision++,conversationState:conversationId===unloadedId?unloadedState:conversationId===otherId?otherState:state}}}));
 const fake = net.createServer(socket => {
   if (!online) {socket.destroy();return;} sockets.add(socket); socket.on('close',()=>sockets.delete(socket));
@@ -52,11 +61,12 @@ const fake = net.createServer(socket => {
       }
       if(message.method==='thread-follower-read-model-settings')result={settings:{model:state.latestModel,reasoningEffort:state.latestReasoningEffort}};
       if(message.method==='thread-follower-submit-user-input') {
+        const target=message.params.conversationId===otherId?otherState:state;
         writeFileSync(join(fixture,'receipt.json'),JSON.stringify(message.params.response));
-        state.requests=[]; state.threadRuntimeStatus={type:'idle'}; state.turns[0].status='completed';
-        if(statusMode){const d=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));d.prepare('UPDATE thread_turns SET status=? WHERE thread_id=?').run('completed',id);d.close();}
-        state.turns[0].items.push({id:'receipt',type:'agentMessage',phase:'final_answer',text:'已收到答案：'+Object.values(message.params.response.answers).flatMap(a=>a.answers).join(' · ')});
-        setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
+        target.requests=[]; target.threadRuntimeStatus={type:'idle'}; target.turns[0].status='completed';
+        if(statusMode){const d=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));d.prepare('UPDATE thread_turns SET status=? WHERE thread_id=?').run('completed',target.id);d.close();}
+        target.turns[0].items.push({id:'receipt',type:'agentMessage',phase:'final_answer',text:'已收到答案：'+Object.values(message.params.response.answers).flatMap(a=>a.answers).join(' · ')});
+        setTimeout(()=>{for(const s of sockets)broadcast(s,target.id);},80);
       }
       if(message.method==='thread-follower-steer-turn') {
         writeFileSync(join(fixture,'steer-receipt.json'),JSON.stringify(message.params));
@@ -84,6 +94,16 @@ console.log(JSON.stringify({url:`http://127.0.0.1:${runtime.port}/`,pairCode:run
 let stopping=false;
 async function stop(){if(stopping)return;stopping=true;const exited=child.exitCode===null?new Promise(resolve=>child.once('exit',resolve)):Promise.resolve();child.kill();for(const s of sockets)s.destroy();await exited; await new Promise(resolve=>fake.close(resolve));if(!resolve(fixture).startsWith(base+'\\'))throw new Error('unsafe fixture cleanup');rmSync(fixture,{recursive:true,force:true,maxRetries:10,retryDelay:50});process.exit(0);}
 const command = line => {
+  if(line.trim()==='notice-waiting'||line.trim()==='notice-complete'){
+    const waiting=line.trim()==='notice-waiting';
+    otherState.requests=waiting?structuredClone(requestTemplate):[];
+    if(!waiting)otherState.turns[0].turnId=randomUUID();
+    otherState.turns[0].status=waiting?'interrupted':'completed';otherState.threadRuntimeStatus={type:'idle'};
+    const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));
+    h.prepare('UPDATE thread_turns SET status=?,turn_id=?,rollout_ordinal=rollout_ordinal+1 WHERE thread_id=?').run(waiting?'interrupted':'completed',otherState.turns[0].turnId,otherId);
+    h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(otherId,'other-turn',Date.now(),randomUUID(),'agentMessage',JSON.stringify({type:'agentMessage',text:'状态变更 · 隔离测试'}),Date.now());h.close();
+    for(const s of sockets)broadcast(s,otherId);
+  }
   if(line.trim()==='offline'){online=false;for(const s of sockets)s.destroy();console.log('Fixture desktop is offline');}
   if(line.trim()==='async'){
     state.requests=[];state.threadRuntimeStatus={type:'active'};state.turns[0].status='inProgress';

@@ -17,6 +17,7 @@ import { DesktopOpener } from './desktop-open.mjs';
 import { getQuota } from './quota.mjs';
 import { allowedAddress } from './network.mjs';
 import { ListStatus } from './list-status.mjs';
+import { ActivityFeed } from './activity.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimeDir = process.env.REMOTE_CODING_RUNTIME_DIR || join(root, '.local');
@@ -26,6 +27,7 @@ const ipc = new DesktopIpc({ pipe: process.env.REMOTE_CODING_IPC_PIPE || '\\\\.\
 const images = new ImageStore();
 const bridge = new Bridge(ipc, catalog, images);
 const listStatus = new ListStatus(bridge,catalog);
+const activity = new ActivityFeed(catalog,listStatus);
 const desktopOpener = new DesktopOpener({ enabled: process.platform === 'win32' && process.env.REMOTE_CODING_DISABLE_DESKTOP_OPEN !== '1' });
 const claude = new ClaudeChannels(), workbuddy = new WorkBuddy();
 const integrationsEnabled = process.env.REMOTE_CODING_EXPERIMENTAL_INTEGRATIONS === '1';
@@ -48,6 +50,7 @@ const staticFiles = new Map([
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/read-state.js', ['read-state.js', 'text/javascript; charset=utf-8']],
   ['/service-tier.js', ['service-tier.js', 'text/javascript; charset=utf-8']],
+  ['/notifications.js', ['notifications.js', 'text/javascript; charset=utf-8']],
   ['/style.css', ['style.css', 'text/css; charset=utf-8']],
   ['/manifest.webmanifest', ['manifest.webmanifest', 'application/manifest+json']],
   ['/icon.svg', ['icon.svg', 'image/svg+xml']],
@@ -286,10 +289,10 @@ async function handler(req, res) {
     if (!catalog.get(id)) return json(res, 404, { error: '会话不存在' });
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store',
       Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-    let closed = false, unsubscribe;
+    let closed = false, unsubscribe, stopActivity;
     const cleanup = () => {
       if (closed) return; closed = true;
-      clearInterval(heartbeat);listStatus.off('change',sendStatuses); unsubscribe?.(); streams.delete(stream); res.end();
+      clearInterval(heartbeat);listStatus.off('change',sendStatuses); stopActivity?.(); unsubscribe?.(); streams.delete(stream); res.end();
     };
     const stream = { sid: s.sid, close: cleanup };
     streams.add(stream);
@@ -302,9 +305,11 @@ async function handler(req, res) {
     listStatus.on('change',sendStatuses);
     const heartbeat = setInterval(() => {
       if (!session(req)) return cleanup();
+      activity.reconcile();
       res.write(': ping\n\n');
     }, 20000);
     req.on('close', cleanup);
+    stopActivity = activity.subscribe(send); if (closed) stopActivity();
     try { unsubscribe = await bridge.subscribe(id, send); if (closed) unsubscribe(); }
     catch (err) { send({ type: 'error', message: err.message }); cleanup(); }
     return;
@@ -380,7 +385,7 @@ let exiting = false;
 function shutdown() {
   if (exiting) return; exiting = true;
   for (const stream of streams) stream.close();
-  listStatus.close(); bridge.close(); catalog.close();
+  activity.close(); listStatus.close(); bridge.close(); catalog.close();
   const path = join(runtimeDir, 'runtime.json');
   try { if (JSON.parse(readFileSync(path, 'utf8')).pid === process.pid) unlinkSync(path); } catch {}
   server.close(() => process.exit(0));

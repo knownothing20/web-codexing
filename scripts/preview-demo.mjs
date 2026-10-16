@@ -27,34 +27,51 @@ const questions = [{ id:'demo-request', method:'item/tool/requestUserInput', que
 
 export function createDemoServer() {
   const streams = new Set();
+  const activeThreads = new Map();
+  const demoThreads = structuredClone(threads);
+  const activity = () => ({type:'activity',threads:demoThreads.map(t=>({...t,pendingKey:t.status==='waiting'?(t.pendingKey || 'demo-question'):null,availability:'ready'})),removedIds:[]});
   const server = http.createServer(async (req,res) => {
     const url = new URL(req.url,'http://127.0.0.1');
     const json = value => {res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
-    const assets = {'/':'index.html','/app.js':'app.js','/read-state.js':'read-state.js','/style.css':'style.css','/icon.svg':'icon.svg','/manifest.webmanifest':'manifest.webmanifest'};
+    const assets = {'/':'index.html','/app.js':'app.js','/read-state.js':'read-state.js','/service-tier.js':'service-tier.js','/notifications.js':'notifications.js','/style.css':'style.css','/icon.svg':'icon.svg','/manifest.webmanifest':'manifest.webmanifest'};
     if (req.method === 'GET' && assets[url.pathname]) {
       let content = readFileSync(join(root,'public',assets[url.pathname]));
       if(url.pathname==='/') content=Buffer.from(content.toString().replaceAll('Remote Coding','Web Codexing').replace('你的 Codex，随身连接','公开演示 · 不连接真实账号').replace('局域网直连','演示模式 · 无真实任务'));
       const type = url.pathname==='/'?'text/html':url.pathname.endsWith('.js')?'text/javascript':url.pathname.endsWith('.css')?'text/css':url.pathname.endsWith('.svg')?'image/svg+xml':'application/json';
       res.writeHead(200,{'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store'});res.end(content);return;
     }
+    if(url.pathname==='/overview') {
+      const scene=['hero','features','connection','notifications'].includes(url.searchParams.get('scene'))?url.searchParams.get('scene'):'hero';
+      res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});res.end(readFileSync(join(root,'docs/visuals/overview.html'),'utf8').replace('body data-scene="hero"',`body data-scene="${scene}"`));return;
+    }
+    if(/^\/(mobile|question|notification|notifications-list|model-settings)\.png$/.test(url.pathname)) {
+      res.writeHead(200,{'Content-Type':'image/png'});res.end(readFileSync(join(root,'docs/previews',url.pathname.slice(1))));return;
+    }
     if(req.method==='POST') { res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'演示模式：不会提交真实任务或设置。'}));return; }
     if(url.pathname==='/api/status') return json({csrf:'demo-only',computer:'演示电脑 · DEMO',connected:true,features:{openDesktop:false}});
     if(url.pathname==='/api/providers') return json({providers:[{id:'codex',name:'Codex',connected:true}]});
     if(url.pathname==='/api/quota') return json({buckets:[{name:'演示额度',plan:null,windows:[{kind:'primary',minutes:300,remaining:80,resetsAt:now+7200000}]}],updatedAt:now,stale:false});
-    if(url.pathname==='/api/threads') return json({threads:threads.filter(t=>t.title.includes(url.searchParams.get('q')||'')),next:null});
-    if(url.pathname==='/api/models') return json({models:[{id:'Codex · Demo',description:'仅演示界面，不代表真实模型可用性',efforts:['low','medium','high'],defaultEffort:'high'}]});
+    if(url.pathname==='/api/threads') return json({threads:demoThreads.filter(t=>t.title.includes(url.searchParams.get('q')||'')),next:null});
+    if(url.pathname==='/api/models') return json({models:[{id:'Codex · Demo',description:'仅演示界面，不代表真实模型可用性',efforts:['low','medium','high'],defaultEffort:'high',serviceTiers:[{id:'priority',name:'Fast'}],defaultServiceTier:null}]});
     const match = /^\/api\/threads\/(demo-chat|demo-question|demo-complete)\/(history|events|skills)$/.exec(url.pathname);
     if(match) {
-      const [,id,action]=match, thread=threads.find(t=>t.id===id);
+      const [,id,action]=match, thread=demoThreads.find(t=>t.id===id);
       const items = id==='demo-question' ? [m('demo-q-user','user','我们先确定下一步的开发方向。'),m('demo-q-agent','assistant','可以，请选择优先级。这是演示问题，不会运行实际任务。',{phase:'commentary'})] : id==='demo-complete' ? [m('demo-done','assistant','项目说明与使用文档已整理完成。',{phase:'final_answer'})] : messages;
       if(action==='skills') return json({skills:[{id:'demo-skill',name:'界面检查',description:'演示用技能条目，不连接本机技能目录'}],warnings:0});
       if(action==='history') return json({messages:items,cursor:null});
       res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store',Connection:'keep-alive'});
-      res.write(`data: ${JSON.stringify({type:'snapshot',connected:true,writable:true,busy:id!=='demo-complete',title:thread.title,model:'Codex · Demo',effort:'high',messages:items,order:items.map(m=>m.id),turnIds:['demo-turn'],requests:id==='demo-question'?questions:[],completionKey:thread.completionKey})}\n\n`);
-      streams.add(res); const timer=setInterval(()=>res.write(': demo\n\n'),20000); req.on('close',()=>{clearInterval(timer);streams.delete(res);});return;
+      res.write(`data: ${JSON.stringify({...activity(),initial:true})}\n\n`);
+      res.write(`data: ${JSON.stringify({type:'snapshot',connected:true,writable:true,busy:thread.status==='running',status:thread.status,title:thread.title,model:'Codex · Demo',effort:'high',serviceTier:'priority',serviceTierKnown:true,messages:items,order:items.map(m=>m.id),turnIds:['demo-turn'],requests:thread.status==='waiting'?questions:[],completionKey:thread.completionKey})}\n\n`);
+      streams.add(res);activeThreads.set(res,id); const timer=setInterval(()=>res.write(': demo\n\n'),20000); req.on('close',()=>{clearInterval(timer);streams.delete(res);activeThreads.delete(res);});return;
     }
     res.writeHead(404);res.end('Demo route not found');
   });
+  // Local test/preview hook only: no HTTP action endpoint and no real account.
+  server.updateDemo = (id,patch) => {
+    const thread=demoThreads.find(t=>t.id===id);if(!thread)throw new Error('Unknown demo chat');
+    Object.assign(thread,patch);
+    for(const stream of streams)stream.write(`data: ${JSON.stringify(activity())}\n\n`);
+  };
   server.stopDemo = () => { for(const stream of streams)stream.end(); server.closeAllConnections(); return new Promise(done=>server.close(done)); };
   return server;
 }

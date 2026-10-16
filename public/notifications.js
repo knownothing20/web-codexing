@@ -22,6 +22,8 @@ export function createNotifications(storage, { now = Date.now, limit = 30 } = {}
   };
   return {
     observe(row, { visible = false } = {}) {
+      // History/question metadata alone must never manufacture an action alert.
+      if(row.status==='waiting'&&row.pendingVerified!==true){entries.delete(row.id);return false;}
       const kind = row.status === 'waiting' ? 'waiting' : row.status === 'idle' && row.unread && row.completionKey ? 'complete' : null;
       if (!kind) { entries.delete(row.id); return false; }
       const token = kind === 'waiting' ? 'waiting:' + (row.pendingKey || 'pending') : 'complete:' + row.completionKey;

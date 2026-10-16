@@ -34,11 +34,44 @@ test('pending operations override stopped/completed state and acknowledged opera
  state.turns[0].status='inProgress';assert.equal(bridge.statusOf('chat',state).status,'running');
  state.turns[0].status='completed';assert.equal(bridge.statusOf('chat',state).status,'idle');
  state.turns[0].items=[{id:'historical',type:'agentMessage',questions:[{title:'Which?',options:['A','B']}]}];
- assert.equal(bridge.statusOf('chat',state).status,'waiting');
+ assert.equal(bridge.statusOf('chat',state).status,'idle');
  bridge.acknowledge('chat','async:historical');assert.equal(bridge.statusOf('chat',state).status,'idle');bridge.close();
 });
 
-test('persisted question metadata finds pending forms in a stopped chat, caches tails and sees later replies',()=>{
+test('historical questions remain manually answerable but never count as current desktop requests',()=>{
+ const ipc=new EventEmitter();ipc.clientId='client';ipc.close=()=>{};
+ const bridge=new Bridge(ipc,{messageTimes:()=>new Map()});
+ const state={id:'chat',requests:[],threadRuntimeStatus:{type:'active'},turns:[
+  {turnId:'old',status:'completed',items:[{id:'old-q',type:'agentMessage',questions:[{title:'Old?',options:['A']}]}]},
+  {turnId:'new',status:'inProgress',items:[]},
+ ]};
+ const thread={id:'chat',owner:'owner',state,timeCache:new Map(),lastMessages:new Map(),notify:()=>{}};
+ const emitted=[];bridge.on('thread-status',row=>emitted.push(row));
+ try {
+  const view=bridge.view(thread);assert.equal(view.requests.length,1);assert.equal(view.requests[0].historical,true);
+  assert.equal(view.status,'running');assert.equal(bridge.statusOf('chat',state).pendingCount,0);
+  bridge.publish(thread);assert.equal(emitted.at(-1).pendingCount,0);assert.deepEqual(emitted.at(-1).requestIds,[]);
+  state.turns[1].items.push({id:'current-q',type:'agentMessage',questions:[{title:'New?',options:['B']}]});
+  assert.equal(bridge.statusOf('chat',state).status,'waiting');assert.deepEqual(bridge.statusOf('chat',state).requestIds,['async:current-q']);
+  state.turns[1].status='completed';state.threadRuntimeStatus={type:'idle'};
+  assert.equal(bridge.statusOf('chat',state).status,'idle');assert.equal(bridge.view(thread).requests.length,2);
+ }finally{bridge.close();}
+});
+
+test('a cached operation loses its pending badge when desktop ownership is known to be gone',()=>{
+ const bridge=new EventEmitter();bridge.ipc={clientId:'client'};bridge.threads=new Map();bridge.acceptedRequests=new Set();
+ const service=new ListStatus(bridge,{statusRecords:()=>[{id:'chat',status:'idle',stamp:'same',pendingIds:[]}]});
+ try {
+  service.read(['chat'],{observe:false});
+  bridge.emit('thread-status',{id:'chat',status:'waiting',pendingCount:1,requestIds:['request'],resumeStatus:'idle'});
+  assert.equal(service.read(['chat'],{observe:false})[0].pendingVerified,true);
+  service.owners.set('chat',{value:'notLoaded',at:Date.now()});
+  const row=service.read(['chat'],{observe:false})[0];
+  assert.equal(row.status,'idle');assert.equal(row.pendingCount,0);assert.equal(row.pendingVerified,false);
+ }finally{service.close();}
+});
+
+test('persisted old question tails never turn a later stopped chat into a pending task; current hints remain bounded',()=>{
  const base=resolve('.local');mkdirSync(base,{recursive:true});const dir=mkdtempSync(join(base,'status-test-'));let catalog,history;
  try {
   const db=new DatabaseSync(join(dir,'state_5.sqlite'));
@@ -48,12 +81,15 @@ test('persisted question metadata finds pending forms in a stopped chat, caches 
   const insert=history.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)');
   insert.run('chat','old','q','agentMessage',JSON.stringify({type:'agentMessage',id:'q',questions:[{title:'Choose',options:['A','B']}]}),2,2);
   catalog=new Catalog(dir);let reads=0;const all=catalog.questionRows.all.bind(catalog.questionRows);catalog.questionRows={all:(...args)=>{reads++;return all(...args);}};
-  assert.deepEqual(catalog.statusRecords(['chat'])[0].pendingIds,['async:q']);
+  assert.deepEqual(catalog.statusRecords(['chat'])[0].pendingIds,[]);
   assert.equal(catalog.statusRecords(['chat'])[0].status,'stopped');assert.equal(reads,1);
   const reply='<send_user_message_question_reply>'+JSON.stringify([{questionItemId:JSON.stringify(['request_user_input_async','q',0]),answer:'A'}])+'</send_user_message_question_reply>';
   insert.run('chat','new','reply','userMessage',JSON.stringify({type:'userMessage',content:[{type:'text',text:reply}]}),4,4);
   assert.deepEqual(catalog.statusRecords(['chat'])[0].pendingIds,[]);assert.equal(reads,2);
   const row=catalog.statusRecords(['chat'])[0];assert.equal(JSON.stringify(row).includes('Choose'),false);assert.equal(reads,2);
+  history.prepare('UPDATE thread_turns SET status=? WHERE thread_id=? AND turn_id=?').run('inProgress','chat','new');
+  insert.run('chat','new','current-q','agentMessage',JSON.stringify({type:'agentMessage',id:'current-q',questions:[{title:'Current',options:['A','B']}]}),5,5);
+  assert.deepEqual(catalog.statusRecords(['chat'])[0].pendingIds,['async:current-q']);
  }finally{history?.close();catalog?.close();assert.ok(resolve(dir).startsWith(base+sep));rmSync(dir,{recursive:true,force:true});}
 });
 
@@ -154,7 +190,7 @@ test('unloaded is independent of pending questions and completed/read markers',a
  const service=new ListStatus(bridge,{statusRecords:()=>records});service.read(records.map(r=>r.id));await tick();
  const [completed,pending]=service.read(records.map(r=>r.id));
  assert.equal(completed.availability,'notLoaded');assert.equal(completed.status,'idle');assert.equal(completed.completionKey,'old-result');
- assert.equal(pending.availability,'notLoaded');assert.equal(pending.status,'waiting');assert.equal(pending.pendingCount,1);
+ assert.equal(pending.availability,'notLoaded');assert.equal(pending.status,'stopped');assert.equal(pending.pendingCount,0);assert.equal(pending.pendingVerified,false);
  assert.ok(options.every(option=>option.ownerOnly));service.close();
 });
 

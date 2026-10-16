@@ -58,24 +58,25 @@ export class ListStatus extends EventEmitter {
   enqueueSnapshot(row) {
     const cached=this.cache.get(row.id);
     if(cached?.stamp===row.stamp&&cached.until>this.now())return;
-    if(row.pendingIds.some(id=>!this.bridge.acceptedRequests.has(row.id+':'+id)))return;
-    if(!['running','stopped'].includes(row.status)&&!['running','waiting'].includes(cached?.value.status))return;
+    if(!row.pendingIds.length&&!['running','stopped'].includes(row.status)&&!['running','waiting'].includes(cached?.value.status))return;
     if(this.queued.has(row.id)||this.started+this.queue.length>=this.maxProbes)return;
     this.queued.add(row.id);this.queue.push(row);
   }
   project(row) {
     const now=this.now(),t=this.bridge.threads.get(row.id),cached=this.cache.get(row.id),owner=this.owners.get(row.id);
-    const pending=row.pendingIds.filter(id=>!this.bridge.acceptedRequests.has(row.id+':'+id));const attached=!!(t?.owner&&t.state);
+    const attached=!!(t?.owner&&t.state);
     let live=attached?this.bridge.statusOf(row.id,t.state):cached?.stamp===row.stamp&&(cached.until>now||now-cached.observedAt<60000)?cached.value:null;
     if(live?.requestIds) {
       const remaining=live.requestIds.filter(id=>!this.bridge.acceptedRequests.has(row.id+':'+id));
       if(remaining.length!==live.pendingCount)live={...live,pendingCount:remaining.length,status:remaining.length?'waiting':live.resumeStatus};
     }
+    if(!attached&&(!this.bridge.ipc.clientId||['notLoaded','offline'].includes(owner?.value)))live=null;
     const availability=!this.bridge.ipc.clientId?'offline':attached?'ready':owner&&now-owner.at<15000?owner.value:'unknown';
-    let status=live?.status||(pending.length?'waiting':row.status);
+    let status=live?.status||row.status;
     if(status==='running'&&['offline','notLoaded'].includes(availability))status=availability;
-    const requests=(live?.requestIds || pending).filter(id=>!this.bridge.acceptedRequests.has(row.id+':'+id));
-    return {id:row.id,status,availability,pendingCount:live?.pendingCount??pending.length,pendingKey:requests.length?pendingKey(requests):null,
+    const requests=(live?.requestIds || []).filter(id=>!this.bridge.acceptedRequests.has(row.id+':'+id));
+    return {id:row.id,status,availability,pendingCount:live?.pendingCount??0,pendingKey:requests.length?pendingKey(requests):null,
+      pendingVerified:availability==='ready'&&!!live&&status==='waiting'&&(live.pendingCount||0)>0,
       completionKey:live?.completionKey!==undefined?live.completionKey:row.completionKey,completedAt:row.completedAt,updatedAt:row.updatedAt};
   }
   notify(id) {

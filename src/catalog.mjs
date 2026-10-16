@@ -76,7 +76,12 @@ export class Catalog {
             if(item.questions)turns.get(item.turn_id).items.push({type:'agentMessage',id:item.item_id,questions:Array.from({length:Math.min(20,item.questions)},()=>({title:''}))});
             else if(item.reply) {try{turns.get(item.turn_id).items.push(JSON.parse(item.reply));}catch{}}
           }
-          cached={version,stamp,pendingIds:asyncQuestions({turns:[...turns.values()]}).map(r=>r.id)};
+          // Metadata is a probe hint, never proof of a current operation. Include
+          // the actual latest turn even when its tail contains no questions.
+          const latest=turns.get(turn?.turn_id)||{turnId:turn?.turn_id,items:[]};
+          latest.status=turn?.status;
+          turns.delete(turn?.turn_id);
+          cached={version,stamp,pendingIds:asyncQuestions({turns:[...turns.values(),latest]}).filter(r=>!r.historical).map(r=>r.id)};
           this.pendingCache.delete(id);this.pendingCache.set(id,cached);
           if(this.pendingCache.size>200)this.pendingCache.delete(this.pendingCache.keys().next().value);
         }

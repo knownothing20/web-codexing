@@ -11,7 +11,8 @@ import {catalogFixture} from './catalog-fixture.mjs';
 
 const base = resolve('.local'); mkdirSync(base, { recursive: true });
 const fixture = mkdtempSync(join(base, 'ui-test-')), id = randomUUID(), pipe = '\\\\.\\pipe\\remote-coding-ui-' + randomUUID();
-const noticeMode=process.argv.includes('--notifications');
+const historicalMode=process.argv.includes('--history-notifications');
+const noticeMode=process.argv.includes('--notifications')||historicalMode;
 const statusMode=process.argv.includes('--status')||noticeMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
 const settingsMode=process.argv.includes('--settings');
@@ -46,6 +47,15 @@ if(noticeMode){
   d.prepare('UPDATE threads SET name=?,title=?,updated_at=? WHERE id=?').run(state.title,state.title,Math.floor(Date.now()/1000)+10,id);
   d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(otherState.title,otherState.title,otherId);d.close();
   const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.prepare('UPDATE thread_turns SET status=?').run('inProgress');h.close();
+}
+if(historicalMode){
+  otherState.threadRuntimeStatus={type:'idle'};
+  otherState.turns=[{turnId:'old-question-turn',status:'completed',items:[{id:'old-question',type:'agentMessage',text:'这是很久以前的问题，只保留手动补答入口。',questions:[{title:'这是很久以前的问题，不应再提醒',options:['历史选项']}]}]},
+    {turnId:'other-turn',status:'completed',items:[{id:'later-result',type:'agentMessage',phase:'final_answer',text:'后续任务已经完成，旧问题只供手动查看和补答。'}]}];
+  const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));
+  h.prepare('UPDATE thread_turns SET status=? WHERE thread_id=?').run('completed',otherId);
+  h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(otherId,'old-question-turn',1,'old-question','agentMessage',JSON.stringify(otherState.turns[0].items[0]),Date.now()-86400000*10);
+  h.close();
 }
 const broadcast = (socket,conversationId=id) => socket.write(frame({type:'broadcast',method:'thread-stream-state-changed',version:11,sourceClientId:'fixture-owner',params:{conversationId,hostId:'local',change:{type:'snapshot',revision:revision++,conversationState:conversationId===unloadedId?unloadedState:conversationId===otherId?otherState:state}}}));
 const fake = net.createServer(socket => {

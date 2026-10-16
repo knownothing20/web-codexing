@@ -29,7 +29,7 @@ export function createDemoServer() {
   const streams = new Set();
   const activeThreads = new Map();
   const demoThreads = structuredClone(threads);
-  const activity = () => ({type:'activity',threads:demoThreads.map(t=>({...t,pendingKey:t.status==='waiting'?(t.pendingKey || 'demo-question'):null,availability:'ready'})),removedIds:[]});
+  const activity = () => ({type:'activity',threads:demoThreads.map(t=>({...t,pendingKey:t.status==='waiting'?(t.pendingKey || 'demo-question'):null,pendingVerified:t.status==='waiting',availability:'ready'})),removedIds:[]});
   const server = http.createServer(async (req,res) => {
     const url = new URL(req.url,'http://127.0.0.1');
     const json = value => {res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};

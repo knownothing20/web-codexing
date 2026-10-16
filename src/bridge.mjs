@@ -140,8 +140,9 @@ export class Bridge extends EventEmitter {
     const changed = snapshot ? messages : messages.filter(m => t.lastMessages.get(m.id) !== next.get(m.id));
     const removed = [...t.lastMessages.keys()].filter(id => !next.has(id));
     t.lastMessages = next;
-    this.emit('thread-status',{id:t.id,status:meta.status,availability:'ready',pendingCount:meta.requests.length,
-      requestIds:meta.requests.map(r=>r.id),resumeStatus:conversationStatus(t.state,[]),completionKey:meta.completionKey});
+    const current=meta.requests.filter(r=>!r.historical);
+    this.emit('thread-status',{id:t.id,status:meta.status,availability:'ready',pendingCount:current.length,
+      requestIds:current.map(r=>r.id),resumeStatus:conversationStatus(t.state,[]),completionKey:meta.completionKey});
     t.notify({ type: snapshot ? 'snapshot' : 'update', ...meta, messages: changed, removed,
       order: messages.map(m => m.id), writable: !!t.owner });
   }
@@ -180,7 +181,7 @@ export class Bridge extends EventEmitter {
   }
   statusOf(id,state) {
     const requests=[...(state.requests || []).filter(r=>!r.completed),...asyncQuestions(state)]
-      .filter(r=>!this.acceptedRequests.has(id+':'+r.id));
+      .filter(r=>!r.historical&&!this.acceptedRequests.has(id+':'+r.id));
     const latest=orderedTurns(state).at(-1);
     return {id,status:conversationStatus(state,requests),availability:'ready',pendingCount:requests.length,
       requestIds:requests.map(r=>r.id),resumeStatus:conversationStatus(state,[]),

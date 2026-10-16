@@ -142,10 +142,11 @@ export function serviceTierState(state) {
   return {serviceTier:known?settings.serviceTier??null:null,serviceTierKnown:known};
 }
 
-// Pending questions/approvals take priority even when their original turn ended.
+// Native pending requests remain authoritative even if a turn stopped. Old async
+// questions stay answerable from history, but do not mean the desktop is waiting.
 export function conversationStatus(state, requests = null) {
   const latest = orderedTurns(state).at(-1);
-  const pending = requests ?? [...(state.requests || []).filter(r => !r.completed), ...asyncQuestions(state)];
+  const pending = (requests ?? [...(state.requests || []).filter(r => !r.completed), ...asyncQuestions(state)]).filter(r=>!r.historical);
   if (pending.length) return 'waiting';
   if (state?.threadRuntimeStatus?.type === 'active' || latest?.status === 'inProgress') return 'running';
   return ({ interrupted:'stopped', failed:'error' })[latest?.status] || 'idle';

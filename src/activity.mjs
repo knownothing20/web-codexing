@@ -49,7 +49,7 @@ export class ActivityFeed {
       const byId = new Map(recent.map(row => [row.id, row]));
       const next = new Map(states.map(row => [row.id, {
         id: row.id, title: byId.get(row.id)?.title || '未命名会话', status: row.status,
-        availability: row.availability, pendingCount: row.pendingCount, pendingKey: row.pendingKey,
+        availability: row.availability, pendingCount: row.pendingCount, pendingKey: row.pendingKey,pendingVerified:row.pendingVerified===true,
         completionKey: row.completionKey, completedAt: row.completedAt,
       }]));
       const candidates = states.filter(row => ['running','waiting'].includes(row.status) || byId.get(row.id)?.status === 'running' ||

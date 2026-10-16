@@ -1,12 +1,13 @@
-import { createReadTracker } from './read-state.js?v=27';
-import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=27';
-import {createNotifications,pendingKey} from './notifications.js?v=27';
+import { createReadTracker } from './read-state.js?v=28';
+import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=28';
+import {createNotifications,pendingKey} from './notifications.js?v=28';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
 let historyCursor = null, threadNext = null, listQuery = '', listGeneration = 0, openGeneration = 0;
 const drafts = new Map(), messageMap = new Map(), messageNodes = new Map();
 const contexts = new Map(), inputDrafts = new Map(), inputStates = new Map();
+const expandedHistorical=new Set();
 const threadCompletion = new Map();
 const threadStatuses = new Map(), liveStatusAt = new Map();
 let statusRefreshing=false,lastListRead=0,statusScrollTimer,statusRefreshAgain=false;
@@ -247,8 +248,9 @@ function updateComposer() {
   $('send').textContent = steering ? '引导' : '↑'; $('send').classList.toggle('steer',steering);
   $('send').setAttribute('aria-label',steering ? '发送引导消息' : '发送消息');
   $('send').title = steering ? '把这句话追加到当前任务，不停止执行' : '发送消息';
-  $('stop').hidden = !writable || !busy; $('activity').hidden = !busy || requestsNow.length>0;
-  $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : writable&&requestsNow.length ? '待操作 · 请处理会话里的问题或审批' : busy ? '正在执行 · 可随时补充一句引导' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
+  const currentRequests=requestsNow.filter(r=>!r.historical);
+  $('stop').hidden = !writable || !busy; $('activity').hidden = !busy || currentRequests.length>0;
+  $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : writable&&currentRequests.length ? '待操作 · 请处理会话里的问题或审批' : busy ? '正在执行 · 可随时补充一句引导' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
   $('char-count').textContent = $('draft').value.length > 5000 ? `${$('draft').value.length}/8000` : '';
   $('model-settings').disabled = !writable || activeProvider !== 'codex';
   $('pick-thread').disabled = !currentId || sending || activeProvider !== 'codex';
@@ -442,6 +444,7 @@ function renderMessage(message) {
         answer.onclick = () => {
           const card = el.querySelector('.question-controls') || [...$('requests').children].find(el => el.dataset.request === 'async:' + message.id);
           if (!card) { toast('这条问题已结束或暂未同步，请查看最新消息'); return; }
+          expandedHistorical.add('async:'+message.id);card.hidden=false;
           card.scrollIntoView({ block: 'center', behavior: 'smooth' });
           card.querySelector('input:not(:disabled),textarea:not(:disabled),button:not(:disabled)')?.focus({ preventScroll: true });
         };
@@ -507,6 +510,7 @@ function renderRequests(requests) {
       action.textContent = request?.historical ? '回复这道问题' : '前往回答';
       const controls = node.querySelector('.question-controls');
       if (controls && active) {
+        controls.hidden=request.historical&&!expandedHistorical.has(request.id);
         inlineIds.push(request.id);
         if (controls.dataset.signature !== uiSignature) { controls.replaceChildren(questionForm(request)); controls.dataset.signature = uiSignature; }
       } else if (controls) { controls.replaceChildren(); delete controls.dataset.signature; }
@@ -519,7 +523,7 @@ function renderRequests(requests) {
   requestSignature = signature;
   $('requests').replaceChildren();
   for (const req of requests || []) {
-    if (inlineIds.includes(req.id)) continue;
+    if (req.historical||inlineIds.includes(req.id)) continue;
     const card = document.createElement('div'); card.className = 'request-card';
     const title = document.createElement('strong'); title.textContent = 'Codex 等待你的处理';
     card.dataset.request = req.id;
@@ -669,7 +673,7 @@ async function loadThreads(append = false) {
       const heading=document.createElement('div');heading.className='thread-row-heading';heading.append(title);
       meta.append(project, time); button.append(heading, meta); button.onclick = () => openThread(thread.id, thread.title); $('threads').append(button);
       const recent=liveStatusAt.get(thread.id)>=started ? threadStatuses.get(thread.id) : thread;
-      paintThreadStatus(thread.id,recent.status,recent.completionKey,recent.completedAt,recent.availability);
+      paintThreadStatus(thread.id,recent.status,recent.completionKey,recent.completedAt,recent.availability,recent.pendingKey,recent.pendingVerified);
     }
     threadNext = data.next; $('more-threads').hidden = threadNext === null;
     $('threads').scrollTop = listScrollTop;
@@ -683,14 +687,15 @@ async function loadThreads(append = false) {
   } catch (err) { toast(err.message); if (activeProvider !== 'codex') renderIntegration(err.message); }
   finally { if (generation === listGeneration) $('refresh-list').disabled = false; }
 }
-function paintThreadStatus(id,status,completionKey,completedAt,availability,attention) {
+function paintThreadStatus(id,status,completionKey,completedAt,availability,attention,verified) {
   availability=availability ?? threadStatuses.get(id)?.availability ?? 'unknown';
   attention=attention??threadStatuses.get(id)?.pendingKey;
-  threadStatuses.set(id,{status,completionKey,completedAt,availability,pendingKey:attention});
+  verified=verified??threadStatuses.get(id)?.pendingVerified??false;
+  threadStatuses.set(id,{status,completionKey,completedAt,availability,pendingKey:attention,pendingVerified:verified});
   if(threadStatuses.size>500)threadStatuses.delete(threadStatuses.keys().next().value);
   if(completionKey!==undefined) threadCompletion.set(id,completionKey);
   const unread=readTracker.observe(id,{status,completionKey:threadCompletion.get(id),completedAt});
-  observeNotice({id,title:threadTitles.get(id)|| (id===currentId?$('thread-title').textContent:'未命名会话'),status,completionKey:threadCompletion.get(id),unread,availability,pendingKey:attention});
+  observeNotice({id,title:threadTitles.get(id)|| (id===currentId?$('thread-title').textContent:'未命名会话'),status,completionKey:threadCompletion.get(id),unread,availability,pendingKey:attention,pendingVerified:verified});
   if(unread)status='unread';
   const row=[...$('threads').children].find(el=>el.dataset.id===id);if(!row)return;
   let loadBadge=row.querySelector('.thread-availability');
@@ -725,7 +730,7 @@ async function refreshThreadStatuses() {
       data=await post('/api/thread-statuses',{ids});
     }
     if(activeProvider!=='codex'||generation!==listGeneration||!listIsVisible())return;
-    for(const thread of data.threads)if(!(liveStatusAt.get(thread.id)>=started))paintThreadStatus(thread.id,thread.status,thread.completionKey,thread.completedAt,thread.availability);
+    for(const thread of data.threads)if(!(liveStatusAt.get(thread.id)>=started))paintThreadStatus(thread.id,thread.status,thread.completionKey,thread.completedAt,thread.availability,thread.pendingKey,thread.pendingVerified);
   } catch { /* The chat connection owns offline notices; keep the last list on a transient failure. */ }
   finally {statusRefreshing=false;if(statusRefreshAgain){statusRefreshAgain=false;requestAnimationFrame(()=>refreshThreadStatuses());}}
 }
@@ -749,7 +754,7 @@ function connectEvents(id, generation) {
         liveStatusAt.set(row.id,Date.now());
         if(threadTitles.size>500)threadTitles.delete(threadTitles.keys().next().value);
         if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
-        paintThreadStatus(row.id,row.status,row.completionKey,row.completedAt,row.availability,row.pendingKey);
+        paintThreadStatus(row.id,row.status,row.completionKey,row.completedAt,row.availability,row.pendingKey,row.pendingVerified);
       }
       for(const removed of data.removedIds || [])notices.remove(removed);
       renderNotices();return;
@@ -757,7 +762,7 @@ function connectEvents(id, generation) {
     if(data.type==='list-status') {
       if(activeProvider==='codex')for(const row of data.threads || []) {
         liveStatusAt.set(row.id,Date.now());if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
-        paintThreadStatus(row.id,row.status,row.completionKey,row.completedAt,row.availability,row.pendingKey);
+        paintThreadStatus(row.id,row.status,row.completionKey,row.completedAt,row.availability,row.pendingKey,row.pendingVerified);
       }
       return;
     }
@@ -800,7 +805,8 @@ function connectEvents(id, generation) {
       displayedCompletionKey=data.completionKey || null;
       liveStatusAt.set(id,Date.now());if(liveStatusAt.size>500)liveStatusAt.delete(liveStatusAt.keys().next().value);
       threadTitles.set(id,data.title || $('thread-title').textContent);
-      paintThreadStatus(id,status,displayedCompletionKey,data.completedAt,'ready',pendingKey((data.requests || []).map(r=>r.id)));
+      const currentRequests=(data.requests || []).filter(r=>!r.historical);
+      paintThreadStatus(id,status,displayedCompletionKey,data.completedAt,'ready',pendingKey(currentRequests.map(r=>r.id)),currentRequests.length>0);
       if (followBottom) $('message-scroll').scrollTop = $('message-scroll').scrollHeight;
       else if (data.type === 'update' && data.messages?.length) hasUnread = true;
       requestAnimationFrame(markCurrentCompletionRead);
@@ -821,6 +827,7 @@ async function openThread(id, title) {
   currentId = id; const generation = ++openGeneration; disconnect();
   if(noticeJump?.id!==id)noticeJump=null;
   displayedCompletionKey=null;
+  expandedHistorical.clear();
   expandFromId = loadExpansion(id); olderOutsideRange = new Set(); manualProgress.clear();
   selectedSkills = contexts.get(id)?.skills || []; selectedThreads = contexts.get(id)?.threads || []; renderContext();
   requestSignature = ''; requestsNow = []; $('picker-overlay').hidden = true; $('settings-overlay').hidden = true; closeImage();

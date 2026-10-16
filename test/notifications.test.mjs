@@ -6,7 +6,14 @@ import { createReadTracker } from '../public/read-state.js';
 import { ActivityFeed } from '../src/activity.mjs';
 
 const storage = () => { const data = new Map(); return { getItem:key=>data.get(key), setItem:(key,value)=>data.set(key,value) }; };
-const waiting = (id='chat', key='question-a') => ({ id, title:'演示会话', status:'waiting', pendingKey:key });
+const waiting = (id='chat', key='question-a') => ({ id, title:'演示会话', status:'waiting', pendingKey:key,pendingVerified:true });
+
+test('history-only or unconfirmed pending metadata never creates a bubble, badge or jump entry',()=>{
+  const center=createNotifications(storage());
+  assert.equal(center.observe({...waiting(),pendingVerified:false}),false);assert.equal(center.list().length,0);
+  assert.equal(center.observe(waiting()),true);assert.equal(center.list().length,1);
+  center.observe({...waiting(),pendingVerified:false});assert.equal(center.list().length,0);
+});
 
 test('pending operations take priority, deduplicate and disappear when actually resolved', () => {
   let now=1;const center=createNotifications(storage(),{now:()=>now++});

@@ -16,7 +16,8 @@ const noticeMode=process.argv.includes('--notifications')||historicalMode;
 const recentMode=process.argv.includes('--recent');
 const statusMode=process.argv.includes('--status')||noticeMode||recentMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
-const mediaMode=process.argv.includes('--media');
+const mediaDetailsMode=process.argv.includes('--media-details');
+const mediaMode=process.argv.includes('--media')||mediaDetailsMode;
 const settingsMode=process.argv.includes('--settings')||mediaMode;
 let ownerReads=0,fullFollows=0;const checkedIds=new Set();
 const metrics=()=>{if(manyMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows}));};
@@ -57,6 +58,7 @@ if(mediaMode){
     {id:'u',type:'userMessage',content:[{type:'text',text:'这两张图片和演示视频，手机上能直接查看吗？'}]},
     {id:'media-answer',type:'agentMessage',phase:'final_answer',text:`可以。图片点开放大，左右切换；视频点击后才加载播放。\n\n![山景](${photos[0]})\n![日落](${photos[1]})\n[演示视频](${clip})\n\n文件留在电脑，手机按需查看。`}
   ];
+  if(mediaDetailsMode)state.turns[0].items[1].text=`这次图片放在对应的折叠预览里，点击下面的按钮查看。\n\n<details>\n<summary>手机预览图</summary>\n\n![山景](${photos[0]})\n![日落](${photos[1]})\n[演示视频](${clip})\n\n</details>\n\n这里是预览块之后的说明。`;
   const d=new DatabaseSync(join(fixture,'state_5.sqlite'));d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);d.close();
   const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,'turn',2,'media-answer','agentMessage',JSON.stringify(state.turns[0].items[1]),Date.now());h.close();
 }

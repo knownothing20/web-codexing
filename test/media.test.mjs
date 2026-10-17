@@ -46,6 +46,21 @@ test('thumbnail generation shrinks pixels, coalesces requests and invalidates ch
   }finally{clean(directory);}
 });
 
+test('collapsed previews keep media placement without paths and leave fenced examples untouched',()=>{
+  const path=resolve('.local','preview.png');
+  const text=`上面的说明\n\n<details>\n<summary>手机预览图</summary>\n\n![预览](${path})\n\n</details>\n\n后面的说明`;
+  const message=messageFromItem({id:'preview',type:'agentMessage',text});
+  const view=new ImageStore().project(message,'chat');
+  const marker=`[rc-media:${view.images[0].id}]`;
+  assert.ok(view.mediaText.indexOf('<summary>手机预览图</summary>')<view.mediaText.indexOf(marker));
+  assert.ok(view.mediaText.indexOf(marker)<view.mediaText.indexOf('</details>'));
+  assert.equal(view.mediaText.includes(path),false);assert.equal(view.text.includes(marker),false);assert.equal(view.text.includes(path),false);
+  const code='```markdown\n'+text+'\n```';
+  assert.equal(imageSources({},code).length,0);
+  const combined=new ImageStore().project(messageFromItem({id:'mixed',type:'agentMessage',text:text+'\n\n'+code}),'chat');
+  assert.ok(combined.mediaText.endsWith(code),'code examples stay literal even if the same media is displayed outside');
+});
+
 test('bounded legacy history projects visible media while still hiding instruction-only records',()=>{
   const directory=fixture();let catalog;
   try{

@@ -1,6 +1,6 @@
-import { createReadTracker } from './read-state.js?v=31';
-import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=31';
-import {createNotifications,pendingKey} from './notifications.js?v=31';
+import { createReadTracker } from './read-state.js?v=32';
+import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=32';
+import {createNotifications,pendingKey} from './notifications.js?v=32';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -283,11 +283,12 @@ function addTime(parent, message) {
   const time = document.createElement('time'); time.className = 'message-time'; time.textContent = value.short; time.title = value.full;
   time.dateTime = new Date(Number(message.at)).toISOString(); parent.append(time);
 }
-function imageGallery(body, message) {
+function imageGallery(body, message, visibleIds=null) {
   const items=[...(message.images||[]).map(p=>({...p,kind:'image'})),...(message.videos||[]).map(p=>({...p,kind:'video'}))];
-  if (!items.length) return;
+  if (!items.some(p=>!visibleIds||visibleIds.has(p.id))) return;
   const gallery = document.createElement('div'); gallery.className = 'image-gallery';
   for (const [index,picture] of items.entries()) {
+    if(visibleIds&&!visibleIds.has(picture.id))continue;
     const button = document.createElement('button'); button.type = 'button'; button.className = 'image-thumb'+(picture.kind==='video'?' video-thumb':''); button.setAttribute('aria-label', (picture.kind==='video'?'播放视频：':'放大图片：') + picture.name);
     const caption = document.createElement('span'); caption.textContent = '点击放大';
     if(picture.kind==='image') {
@@ -364,8 +365,9 @@ function inline(parent, text) {
   }
   parent.append(document.createTextNode(text.slice(at)));
 }
-function markdown(text) {
+function markdown(text, message=null, depth=0) {
   const frag = document.createDocumentFragment(), lines = text.split('\n');
+  const mediaIds=new Set([...(message?.images||[]),...(message?.videos||[])].map(p=>p.id));
   let paragraph = [], list = null;
   const flush = () => { if (paragraph.length) { const p = document.createElement('p'); inline(p, paragraph.join('\n')); frag.append(p); paragraph = []; } list = null; };
   for (let i = 0; i < lines.length; i++) {
@@ -380,6 +382,34 @@ function markdown(text) {
       button.onclick = async () => { try { await copyText(code.join('\n')); button.textContent = '已复制'; } catch { toast('无法复制，请长按选择文本'); } };
       const pre = document.createElement('pre'), el = document.createElement('code'); el.textContent = code.join('\n');
       heading.append(label, button); pre.append(el); block.append(heading, pre); frag.append(block); continue;
+    }
+    const detailsStart=/^\s*<details(?:\s+open)?\s*>\s*(?:<summary>(.*?)<\/summary>)?\s*$/i.exec(line);
+    if(detailsStart&&depth<4){
+      let nesting=1,end=i+1,fenced=false;
+      for(;end<lines.length;end++){
+        if(/^\s*```/.test(lines[end])){fenced=!fenced;continue;}
+        if(fenced)continue;
+        if(/^\s*<details(?:\s+open)?\s*>/i.test(lines[end]))nesting++;
+        if(/^\s*<\/details>\s*$/i.test(lines[end])&&--nesting===0)break;
+      }
+      if(end<lines.length){
+        flush();const body=lines.slice(i+1,end);let label=detailsStart[1];
+        const summaryAt=body.findIndex(part=>part.trim());
+        if(label==null&&summaryAt>=0){const summary=/^\s*<summary>(.*?)<\/summary>\s*$/i.exec(body[summaryAt]);if(summary){label=summary[1];body.splice(summaryAt,1);}}
+        const details=document.createElement('details');details.className='message-details';details.open=/\sopen\s*>/i.test(line);
+        const summary=document.createElement('summary');inline(summary,label||'查看详情');details.append(summary,markdown(body.join('\n'),message,depth+1));
+        details.addEventListener('toggle',updateJump);frag.append(details);i=end;continue;
+      }
+    }
+    const marker=/^\s*\[rc-media:([a-f0-9]{64})\]\s*$/.exec(line);
+    if(marker&&mediaIds.has(marker[1])){
+      flush();const visibleIds=new Set([marker[1]]);let end=i+1;
+      for(;end<lines.length;end++){
+        if(!lines[end].trim())continue;
+        const next=/^\s*\[rc-media:([a-f0-9]{64})\]\s*$/.exec(lines[end]);
+        if(!next||!mediaIds.has(next[1]))break;visibleIds.add(next[1]);
+      }
+      imageGallery(frag,message,visibleIds);i=end-1;continue;
     }
     if (/^\s*\|/.test(line) && /^\s*\|?\s*:?-{3}/.test(lines[i+1] || '')) {
       flush(); const wrap = document.createElement('div'); wrap.className = 'table-wrap'; const table = document.createElement('table');
@@ -408,8 +438,8 @@ function renderMessage(message) {
   }
   const body = document.createElement('div'); body.className = 'message-body';
   if(message.guidance){const badge=document.createElement('span');badge.className='guidance-badge';badge.textContent='↳ 引导';body.append(badge);}
-  imageGallery(body, message);
   if (message.role === 'user') {
+    imageGallery(body, message);
     if (message.references?.length || message.skills?.length) {
       const context = document.createElement('div'); context.className = 'message-context';
       for (const reference of message.references || []) {
@@ -434,8 +464,11 @@ function renderMessage(message) {
     }
     body.append(document.createTextNode(text));
   } else {
-    const text = message.text.replace(/:codex-annotation\{index="\d+"\}/g, '');
-    body.append(markdown(message.images?.length || message.videos?.length ? text.replace(/!?\[[^\]]*\]\(<?(?:[A-Za-z]:[\\/]|\/)[^\n]*?\.(?:png|jpe?g|gif|webp|mp4|m4v|webm|mov)>?\)/gi, '') : text));
+    const text = (message.mediaText??message.text).replace(/:codex-annotation\{index="\d+"\}/g, '');
+    const placedIds=new Set([...text.matchAll(/^\s*\[rc-media:([a-f0-9]{64})\]\s*$/gm)].map(m=>m[1]));
+    const unplacedIds=new Set([...(message.images||[]),...(message.videos||[])].map(p=>p.id).filter(id=>!placedIds.has(id)));
+    imageGallery(body,message,unplacedIds);
+    body.append(markdown(text,message));
   }
   if (message.phase === 'commentary') {
     const details = document.createElement('details'); details.className = 'progress-details';

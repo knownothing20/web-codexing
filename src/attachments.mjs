@@ -4,6 +4,13 @@ import { basename, extname, isAbsolute, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
 const limit = 24 * 1024 * 1024;
+function replaceMediaLinks(text, replace) {
+  let fenced=false;
+  return text.split('\n').map(line=>{
+    if(/^\s*```/.test(line)){fenced=!fenced;return line;}
+    return fenced?line:line.replace(/!?\[([^\]]*)\]\(<?((?:[A-Za-z]:[\\/]|\/)[^\n]*?\.(?:png|jpe?g|gif|webp|mp4|m4v|webm|mov))>?\)/gi,replace);
+  }).join('\n');
+}
 function localSources(item, raw, extension, localType) {
   const result = [];
   const add = (path, name) => {
@@ -19,7 +26,7 @@ function localSources(item, raw, extension, localType) {
     if (part.type === localType) add(part.path);
     if (localType === 'localImage' && part.type === 'image' && typeof part.url === 'string' && /^data:image\/(png|jpeg|gif|webp);base64,/.test(part.url) && part.url.length <= limit * 1.4) result.push({ data: part.url, name: '图片' });
   }
-  for (const m of raw.matchAll(/!?\[([^\]]*)\]\(<?((?:[A-Za-z]:[\\/]|\/)[^\n]*?\.(?:png|jpe?g|gif|webp|mp4|m4v|webm|mov))>?\)/gi)) add(m[2], m[1]);
+  replaceMediaLinks(raw,(link,label,path)=>{add(path,label);return link;});
   return [...new Map(result.map(s => [s.path ? (process.platform === 'win32' ? s.path.toLowerCase() : s.path) : s.data, s])).values()].slice(0, 32);
 }
 export const imageSources = (item, raw = '') => localSources(item, raw, /\.(png|jpe?g|gif|webp)$/i, 'localImage');
@@ -46,12 +53,6 @@ export class ImageStore {
   constructor() { this.key = randomBytes(32); this.entries = new Map(); this.thumbs=new Map();this.thumbBytes=0;this.thumbJobs=new Map();this.thumbTail=Promise.resolve(); }
   project(message, threadId) {
     const { imageSources: sources = [], videoSources: clips = [], ...publicMessage } = message;
-    // Cards replace these links, so their filesystem paths need not reach the phone.
-    const paths=new Set([...sources,...clips].filter(s=>s.path).map(s=>process.platform==='win32'?s.path.toLowerCase():s.path));
-    if(typeof publicMessage.text==='string'&&paths.size)publicMessage.text=publicMessage.text.replace(/!?\[([^\]]*)\]\(<?((?:[A-Za-z]:[\\/]|\/)[^\n]*?\.(?:png|jpe?g|gif|webp|mp4|m4v|webm|mov))>?\)/gi,(link,label,path)=>{
-      const normalized=resolve(/^\/[A-Za-z]:[\\/]/.test(path)?path.slice(1):path);
-      return paths.has(process.platform==='win32'?normalized.toLowerCase():normalized)?'':link;
-    });
     const register = (source, kind) => {
       const id = createHmac('sha256', this.key).update(threadId + '\0' + kind + '\0' + (source.path || source.data)).digest('hex');
       this.entries.delete(id); this.entries.set(id, {...source,kind});
@@ -60,7 +61,19 @@ export class ImageStore {
       const fileName=source.path?basename(source.path):'image.'+(source.data?.startsWith('data:image/jpeg')?'jpg':source.data?.match(/^data:image\/(\w+)/)?.[1]||'png');
       return { id, name: source.name, fileName, url, ...(kind==='image'?{thumbnailUrl:url+'?size=thumb'}:{}) };
     };
-    return { ...publicMessage, images:sources.map(source=>register(source,'image')),videos:clips.map(source=>register(source,'video')) };
+    const images=sources.map(source=>register(source,'image')),videos=clips.map(source=>register(source,'video'));
+    // Preserve placement (including collapsed previews) without sending filesystem paths.
+    const key=path=>process.platform==='win32'?path.toLowerCase():path;
+    const paths=new Map([...sources.map((source,i)=>[source,images[i]]),...clips.map((source,i)=>[source,videos[i]])].filter(([source])=>source.path).map(([source,media])=>[key(source.path),media.id]));
+    if(typeof publicMessage.text==='string'&&paths.size){
+      let placed=false;
+      const mediaText=replaceMediaLinks(publicMessage.text,(link,label,path)=>{
+        const normalized=resolve(/^\/[A-Za-z]:[\\/]/.test(path)?path.slice(1):path),id=paths.get(key(normalized));
+        if(!id)return link;placed=true;return `\n[rc-media:${id}]\n`;
+      });
+      if(placed){publicMessage.mediaText=mediaText;publicMessage.text=mediaText.replace(/^\[rc-media:[a-f0-9]{64}\]$/gm,'');}
+    }
+    return { ...publicMessage, images,videos };
   }
   async read(id) {
     const source = this.entries.get(id);

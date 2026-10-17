@@ -26,6 +26,13 @@ A lightweight, self-hosted web companion for your computer's Codex desktop chats
 
 **直接看图片和视频。** 图片先加载小尺寸缩略图，点击放大；同一条消息里的媒体可左右切换，图片支持手指滑动。视频显示播放卡片，点击才读取，支持进度拖动、播放器全屏和原文件下载；关闭预览或切到后台后停止传输。视频卡片使用轻量占位封面，不会为了取首帧预读视频或后台转码。
 
+消息中的“手机预览图”等 `details / summary` 折叠块可以直接点开，图片和视频留在正文对应的位置，不会被移到回复顶部。折叠时不加载缩略图；代码块中的标签仍按代码显示，不执行任意 HTML。
+
+<p>
+  <img src="docs/previews/media-details-closed.png" width="260" alt="手机预览图：可点击的折叠按钮">
+  <img src="docs/previews/media-details-open.png" width="260" alt="展开后：图片与视频留在预览块中">
+</p>
+
 <p>
   <img src="docs/previews/media-gallery.png" width="260" alt="手机会话：图片缩略图与视频播放卡片">
   <img src="docs/previews/media-photo.png" width="260" alt="手机预览：放大图片、左右切换与原图下载">

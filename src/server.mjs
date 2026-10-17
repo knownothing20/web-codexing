@@ -18,6 +18,8 @@ import { getQuota } from './quota.mjs';
 import { allowedAddress } from './network.mjs';
 import { ListStatus } from './list-status.mjs';
 import { ActivityFeed } from './activity.mjs';
+import { UploadStore, MAX_UPLOAD } from './uploads.mjs';
+import { ForkService } from './forks.mjs';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimeDir = process.env.REMOTE_CODING_RUNTIME_DIR || join(root, '.local');
@@ -25,6 +27,8 @@ mkdirSync(runtimeDir, { recursive: true });
 const catalog = new Catalog();
 const ipc = new DesktopIpc({ pipe: process.env.REMOTE_CODING_IPC_PIPE || '\\\\.\\pipe\\codex-ipc' });
 const images = new ImageStore();
+const uploads = new UploadStore(runtimeDir), forks = new ForkService(runtimeDir);
+let uploadReaders = 0;
 const bridge = new Bridge(ipc, catalog, images);
 const listStatus = new ListStatus(bridge,catalog);
 const activity = new ActivityFeed(catalog,listStatus);
@@ -46,6 +50,7 @@ const protocol = tls ? 'https' : 'http';
 let port;
 let urls;
 const staticFiles = new Map([
+  ['/clipboard.js', ['clipboard.js', 'text/javascript; charset=utf-8']],
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
   ['/read-state.js', ['read-state.js', 'text/javascript; charset=utf-8']],
@@ -102,7 +107,7 @@ async function handler(req, res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   if (!privateIp(req.socket.remoteAddress || '') || !validHost(req)) return json(res, 403, { error: '仅允许本机和局域网访问' });
   if (!sameOrigin(req)) return json(res, 403, { error: '禁止跨站访问' });
   const url = new URL(req.url, `${protocol}://${req.headers.host}`);
@@ -172,7 +177,7 @@ async function handler(req, res) {
   if (!['GET','HEAD'].includes(req.method) && req.headers['x-csrf-token'] !== s.csrf) return json(res, 403, { error: '会话校验失败，请刷新页面' });
   if (req.method === 'GET' && path === '/api/status') return json(res, 200, {
     csrf: s.csrf, connected: !!ipc.clientId, computer: hostname(), authMode, remembered: !!s.remembered, transport: tls ? 'https' : 'lan-http',
-    features: { live: true, send: true, stop: true, approvals: true, userInput: true, images: true, videos: true, skills: true, references: true, openDesktop: desktopOpener.enabled, create: false },
+    features: { live: true, send: true, stop: true, approvals: true, userInput: true, images: true, videos: true, uploads:true, fork:true, skills: true, references: true, openDesktop: desktopOpener.enabled, create: false },
   });
   if (req.method === 'GET' && path === '/api/quota') {
     if (process.env.REMOTE_CODING_DISABLE_ACCOUNT_QUOTA === '1') return json(res, 503, { error: '测试环境未启用账号额度读取' });
@@ -273,7 +278,19 @@ async function handler(req, res) {
     catch(err){if(res.headersSent)res.destroy();else return json(res,404,{error:err.message});}
     return;
   }
-  const match = /^\/api\/threads\/([0-9a-f-]{36})\/(history|events|send|stop|approval|input|settings|skills|open-desktop)$/.exec(path);
+  if (path === '/api/uploads' && req.method === 'POST') {
+    const threadId = url.searchParams.get('threadId');
+    if (!catalog.get(threadId)) return json(res,404,{error:'请先选择一条有效会话'});
+    if (uploadReaders >= 2) return json(res,429,{error:'正在接收附件，请稍后重试'});
+    uploadReaders++;
+    try {
+      let size=0; const chunks=[];
+      for await (const chunk of req) { size+=chunk.length; if (size>MAX_UPLOAD) throw new Error('每个附件最多 20 MB'); chunks.push(chunk); }
+      return json(res,200,await uploads.add({sid:s.sid,threadId,name:url.searchParams.get('name'),image:url.searchParams.get('image')==='1',bytes:Buffer.concat(chunks)}));
+    } finally { uploadReaders--; }
+  }
+  if (/^\/api\/uploads\/[0-9a-f-]{36}$/.test(path) && req.method === 'DELETE') { uploads.remove(path.split('/').at(-1),s.sid); return json(res,200,{ok:true}); }
+  const match = /^\/api\/threads\/([0-9a-f-]{36})\/(history|events|send|stop|approval|input|settings|skills|open-desktop|fork)$/.exec(path);
   if (!match) return json(res, 404, { error: '接口不存在' });
   const [, id, action] = match;
   if (action === 'skills' && req.method === 'GET') {
@@ -322,6 +339,14 @@ async function handler(req, res) {
   }
   if (req.method !== 'POST') return json(res, 405, { error: '请求方法不支持' });
   const data = await body(req);
+  if (action === 'fork') {
+    if (typeof data.messageId !== 'string' || data.messageId.length>200) return json(res,400,{error:'请选择一条回复'});
+    const lastTurnId = catalog.branchPoint(id,data.messageId);
+    try {
+      const result=await forks.create({sid:s.sid,requestId:data.requestId,threadId:id,lastTurnId});
+      return json(res,200,{...result,title:(catalog.get(id).name || catalog.get(id).title || '会话').split('\n')[0]+' · 分支'});
+    } catch(err) { return json(res,409,{error:err.message,unknown:!!err.unknown}); }
+  }
   if (action === 'open-desktop') {
     if (!catalog.get(id)) return json(res, 404, { error: '会话不存在或已归档' });
     if (!ipc.clientId || !desktopOpener.enabled) return json(res, 409, { error: '请先在电脑启动 Codex；当前无法打开桌面会话' });
@@ -329,7 +354,7 @@ async function handler(req, res) {
   }
   if (action === 'send') {
     if (data.mode !== undefined && !['message','steer'].includes(data.mode)) return json(res,400,{error:'无效发送方式'});
-    if (typeof data.text !== 'string' || !data.text.trim() || data.text.length > 8000 || !/^[0-9a-f-]{36}$/.test(data.messageId || '')) return json(res, 400, { error: '请输入 1–8000 字的消息' });
+    if (typeof data.text !== 'string' || (!data.text.trim() && !data.uploadIds?.length) || data.text.length > 8000 || !/^[0-9a-f-]{36}$/.test(data.messageId || '')) return json(res, 400, { error: '请输入消息或选择附件，文字最多 8000 字' });
     const key = `${s.sid}:${id}:${data.messageId}`;
     if (!sends.has(key)) {
       if (sends.size >= 512) return json(res, 429, { error: '发送记录已满，请重启桥接程序' });
@@ -348,7 +373,9 @@ async function handler(req, res) {
           const skill = available.skills.find(s => s.id === skillId); if (!skill) throw new Error('所选 Skill 已不可用，请重新选择'); return skill;
         });
       }
-      sends.set(key, bridge.send(id, data.text.trim(), data.messageId, { skills, references, mode:data.mode || 'message' }).then(result => ({ result }),
+      const files = uploads.resolve(data.uploadIds || [],s.sid,id);
+      uploads.retain(files);
+      sends.set(key, bridge.send(id, data.text.trim() || '请查看附件。', data.messageId, { skills, references, uploads:files, mode:data.mode || 'message' }).then(result => { uploads.forget(files); return { result }; },
         err => ({ error: err.message, unknown: !!err.unknown || /连接已断开|request-timeout/.test(err.message) })));
     }
     const outcome = await sends.get(key);

@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 
 let cached, pending;
-function executable() {
+export function executable() {
   if (process.env.REMOTE_CODING_CODEX) return process.env.REMOTE_CODING_CODEX;
   const dir = join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'OpenAI', 'Codex', 'bin');
   try {

@@ -18,7 +18,8 @@ const statusMode=process.argv.includes('--status')||noticeMode||recentMode,other
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
 const mediaDetailsMode=process.argv.includes('--media-details');
 const mediaMode=process.argv.includes('--media')||mediaDetailsMode;
-const settingsMode=process.argv.includes('--settings')||mediaMode;
+const actionsMode=process.argv.includes('--actions');
+const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode;
 let ownerReads=0,fullFollows=0;const checkedIds=new Set();
 const metrics=()=>{if(manyMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows}));};
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
@@ -43,6 +44,15 @@ const otherState={id:otherId,title:'另一个会话 · 隔离测试',threadRunti
 const unloadedState={...otherState,id:unloadedId,title:'尚未打开 · 隔离测试'};
 const requestTemplate=structuredClone(state.requests);
 if(settingsMode){state.latestModel='demo-fast';state.latestReasoningEffort='high';state.latestThreadSettings={model:'demo-fast',serviceTier:'priority'};state.requests=[];state.threadRuntimeStatus={type:'idle'};state.turns[0].status='completed';}
+if(actionsMode){
+  const {default:sharp}=await import('sharp');
+  await sharp(Buffer.from('<svg width="900" height="550"><rect width="900" height="550" fill="#e9f0e6"/><text x="70" y="145" font-size="42" fill="#426b51">SCREENSHOT PREVIEW</text><text x="70" y="230" font-size="25" fill="#426b51">Paste on PC / Upload on phone</text></svg>')).png().toFile(join(fixture,'screenshot.png'));
+  writeFileSync(join(fixture,'notes.txt'),'Synthetic document for local upload acceptance.');
+  state.title='截图与文件 · 网页对话';state.turns=[{turnId:'turn',status:'completed',items:[{id:'u',type:'userMessage',content:[{type:'text',text:'这段回复可以复制，也可以从这里继续分支吗？'}]},{id:'a',type:'agentMessage',phase:'final_answer',text:'可以。回复下方点「复制」保存内容，点「分支」从这里开始新的方向。\n\n电脑支持粘贴截图，手机可以通过输入框旁的「＋」选择图片和文件。'}]},{turnId:'later',status:'completed',items:[{id:'later-u',type:'userMessage',content:[{type:'text',text:'这条是后续消息，前一条回复的分支不应包含它。'}]},{id:'later-a',type:'agentMessage',text:'已了解。这条后续回复用来核对分支位置。'}]}];
+  const d=new DatabaseSync(join(fixture,'state_5.sqlite'));d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);d.close();
+  const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.exec('CREATE TABLE thread_turns(thread_id TEXT,turn_id TEXT,rollout_ordinal INTEGER,status TEXT)');h.prepare('DELETE FROM thread_items WHERE thread_id=?').run(id);
+  let order=0;for(const turn of state.turns){h.prepare('INSERT INTO thread_turns VALUES(?,?,?,?)').run(id,turn.turnId,++order,'completed');for(const item of turn.items)h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,turn.turnId,++order,item.id,item.type,JSON.stringify(item),Date.now());}h.close();
+}
 if(mediaMode){
   const {default:sharp}=await import('sharp');
   const photos=[];
@@ -86,6 +96,7 @@ const fake = net.createServer(socket => {
   const reader = new FrameReader(message=>{
     if (message.type==='request') {
       if(message.method==='thread-owner-discovery'){ownerReads++;checkedIds.add(message.params.conversationId);metrics();}
+      if(actionsMode&&message.method==='thread-owner-discovery'&&message.params.conversationId!==id){socket.write(frame({type:'response',requestId:message.requestId,resultType:'error',error:'no-client-found'}));return;}
       if(message.method==='thread-owner-discovery'&&(message.params.conversationId===unloadedId&&!missingLoaded||manyIds.has(message.params.conversationId))){socket.write(frame({type:'response',requestId:message.requestId,resultType:'error',error:'no-client-found'}));return;}
       let result={}; if(message.method==='initialize')result={clientId:'fixture-client'};
       if(message.method==='thread-follower-update-thread-settings') {
@@ -110,8 +121,8 @@ const fake = net.createServer(socket => {
       if(message.method==='thread-follower-start-turn') {
         if(message.params.turnStart.context.useUserMessageAdmission)throw new Error('Cloud admission must stay disabled');
         writeFileSync(join(fixture,'history-reply-receipt.json'),JSON.stringify(message.params));
-        state.turns.push({turnId:'history-reply',status:'inProgress',items:[{id:'history-answer',type:'userMessage',content:message.params.turnStart.request.input}]});
-        state.threadRuntimeStatus={type:'active'};
+        state.turns.push({turnId:'history-reply',status:actionsMode?'completed':'inProgress',items:[{id:'history-answer',type:'userMessage',content:message.params.turnStart.request.input},...actionsMode?[{id:'upload-answer',type:'agentMessage',phase:'final_answer',text:'已收到图片和文件（隔离测试回执，没有运行真实任务）。'}]:[]]});
+        state.threadRuntimeStatus={type:actionsMode?'idle':'active'};
         setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
       }
       socket.write(frame({type:'response',requestId:message.requestId,method:message.method,handledByClientId:'fixture-owner',resultType:'success',result}));

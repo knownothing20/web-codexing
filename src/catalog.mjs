@@ -104,8 +104,27 @@ export class Catalog {
     }
     const hasMore = items.length > limit;
     const page = items.slice(0, limit).reverse();
-    return { messages: page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length || m?.videoSources?.length),
+    const branchable = new Set();
+    if (this.turnStatus) {
+      const ids=[...new Set(page.map(r=>r.turn_id))], slots=ids.map(()=>'?').join(',');
+      const completed=new Set(this.history.prepare(`SELECT turn_id FROM thread_turns WHERE thread_id=? AND status='completed' AND turn_id IN (${slots})`).all(id,...ids).map(r=>r.turn_id));
+      // SQLite's single MAX aggregate selects item_id from that final row.
+      const last=this.history.prepare(`SELECT turn_id,item_id,MAX(rollout_ordinal) FROM thread_items WHERE thread_id=? AND turn_id IN (${slots}) AND item_type='agentMessage' GROUP BY turn_id`).all(id,...ids);
+      for(const row of last)if(completed.has(row.turn_id))branchable.add(row.item_id);
+    }
+    return { messages: page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), branchable:branchable.has(r.item_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length || m?.videoSources?.length),
       cursor: hasMore ? page[0].rollout_ordinal : null };
+  }
+  branchPoint(id,messageId) {
+    if (!this.get(id) || !this.history || !this.turnStatus) throw new Error('该历史记录暂不支持分支');
+    const row = this.history.prepare("SELECT turn_id,item_json FROM thread_items WHERE thread_id=? AND item_id=? AND item_type='agentMessage'").get(id,messageId);
+    if (!row) throw new Error('所选回复尚未保存，请稍后重试');
+    const item = JSON.parse(row.item_json);
+    if (item.phase === 'commentary' || item.questions?.length) throw new Error('请从一轮已完成的正式回复创建分支');
+    const turn = this.history.prepare('SELECT status FROM thread_turns WHERE thread_id=? AND turn_id=?').get(id,row.turn_id);
+    const last = this.history.prepare("SELECT item_id FROM thread_items WHERE thread_id=? AND turn_id=? AND item_type='agentMessage' ORDER BY rollout_ordinal DESC LIMIT 1").get(id,row.turn_id);
+    if (turn?.status !== 'completed' || last?.item_id !== messageId) throw new Error('该轮尚未完成，或所选内容不是本轮最后一条回复');
+    return row.turn_id;
   }
   legacyPage(row, before, limit) {
     // Bound disk work on old JSONL histories. Never read arbitrary paths from the client.

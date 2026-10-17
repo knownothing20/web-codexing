@@ -41,7 +41,8 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
           assert.equal(message.version, 2);
           assert.equal(message.targetClientId, 'fake-desktop');
           assert.equal(message.params.turnStart.context.useUserMessageAdmission, false);
-          assert.equal(message.params.turnStart.request.input[0].text, '发送测试');
+          assert.ok(message.params.turnStart.request.input[0].text.endsWith('发送测试'));
+          if(message.params.turnStart.request.input[0].text.startsWith('# Files mentioned'))assert.match(message.params.turnStart.request.input[0].text,/## upload-notes.txt:/);
           result = { result: { turn: { id: 'turn2' } } };
         }
         if (message.method === 'thread-follower-submit-user-input') {
@@ -121,7 +122,13 @@ test('HTTP pairing, SSE, message routing, deduplication and access boundaries', 
     const pushed=text.split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6))).find(value=>value.type==='list-status');
     assert.ok(pushed.threads.length);assert.equal(Object.hasOwn(pushed.threads[0],'requestIds'),false);
     const messageId = randomUUID();
-    const send = () => fetch(url + `/api/threads/${id}/send`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: JSON.stringify({ text: '发送测试', messageId }) });
+    const uploadUrl=url+'/api/uploads?'+new URLSearchParams({threadId:id,name:'upload-notes.txt',image:'0'});
+    assert.equal((await fetch(uploadUrl,{method:'POST',body:'private upload test'})).status,401);
+    assert.equal((await fetch(uploadUrl,{method:'POST',headers:{Cookie:cookie},body:'private upload test'})).status,403);
+    const uploadResponse=await fetch(uploadUrl,{method:'POST',headers:{...statusHeaders,'Content-Type':'application/octet-stream'},body:'Synthetic upload document'});
+    assert.equal(uploadResponse.status,200);const upload=await uploadResponse.json();assert.equal(upload.name,'upload-notes.txt');assert.equal(Object.hasOwn(upload,'path'),false);
+    const wrongChat=await fetch(url+`/api/threads/${recentId}/send`,{method:'POST',headers:statusHeaders,body:JSON.stringify({text:'发送测试',messageId:randomUUID(),uploadIds:[upload.id]})});assert.equal(wrongChat.status,400);assert.equal(starts,0);
+    const send = () => fetch(url + `/api/threads/${id}/send`, { method: 'POST', headers: { Cookie: cookie, 'X-CSRF-Token': status.csrf }, body: JSON.stringify({ text: '发送测试', messageId, uploadIds:[upload.id] }) });
     assert.equal((await send()).status, 200); assert.equal((await send()).status, 200); assert.equal(starts, 1);
     // Test the actual MCP stdio channel without launching Claude or making a model request.
     channelChild = spawn(process.execPath, ['src/claude-channel.mjs'], { cwd: process.cwd(), windowsHide: true,

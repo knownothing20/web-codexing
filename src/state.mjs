@@ -98,9 +98,10 @@ export function messageFromItem(item, turnId = '', index = 0) {
 export function messagesFromTurns(turns) {
   const messages = turns.flatMap(turn => {
     const items = turn.items || [];
+    const lastAgent = items.findLast(i=>i.type === 'agentMessage');
     const messages = items.map((item, i) => {
       const m = messageFromItem(item, turn.turnId || turn.id, i);
-      return m ? { ...m, at: turn.turnStartedAtMs || null, timeSource: 'turn' } : null;
+      return m ? { ...m, branchable:turn.status === 'completed' && item === lastAgent && m.role === 'assistant' && m.phase !== 'commentary' && m.kind !== 'question', at: turn.turnStartedAtMs || null, timeSource: 'turn' } : null;
     }).filter(Boolean);
     if (!items.some(i => i.type === 'userMessage') && turn.params?.input?.length) {
       const text = visibleUserText(contentText(turn.params.input));

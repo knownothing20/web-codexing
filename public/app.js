@@ -1,11 +1,48 @@
 import { createReadTracker } from './read-state.js?v=32';
 import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=32';
 import {createNotifications,pendingKey} from './notifications.js?v=32';
+import {copyText} from './clipboard.js?v=33';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
 let historyCursor = null, threadNext = null, listQuery = '', listGeneration = 0, openGeneration = 0;
 const drafts = new Map(), messageMap = new Map(), messageNodes = new Map();
+const attachmentDrafts=new Map(), forkRequests=new Map(); let branchSelection=null;
+function currentAttachments(){return attachmentDrafts.get(currentId)||[];}
+function renderAttachments(){
+  const files=currentAttachments(), root=$('draft-attachments');root.replaceChildren();root.hidden=!files.length;
+  for(const file of files){
+    const card=document.createElement('div');card.className='draft-attachment';
+    if(file.preview){const image=document.createElement('img');image.src=file.preview;image.alt=file.name;card.append(image);}
+    const label=document.createElement('span');label.textContent=file.name;const state=document.createElement('small');state.textContent=file.error?'上传失败，请移除后重选':file.uploading?'正在上传…':'已就绪';label.append(state);card.append(label);
+    const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.disabled=sending||uncertain;remove.setAttribute('aria-label','移除附件 '+file.name);
+    remove.onclick=()=>removeAttachment(currentId,file);card.append(remove);root.append(card);
+  }
+}
+function removeAttachment(threadId,file){
+  const list=attachmentDrafts.get(threadId)||[];attachmentDrafts.set(threadId,list.filter(f=>f!==file));file.removed=true;
+  if(file.preview)URL.revokeObjectURL(file.preview);
+  if(file.id)api('/api/uploads/'+file.id,{method:'DELETE'}).catch(()=>{});
+  if(threadId===currentId){renderAttachments();updateComposer();}
+}
+async function addAttachments(files){
+  if(!currentId||activeProvider!=='codex'||sending||uncertain)return;
+  const threadId=currentId;
+  for(const raw of files){
+    const list=attachmentDrafts.get(threadId)||[];attachmentDrafts.set(threadId,list);
+    if(list.length>=8){toast('每条消息最多 8 个附件');break;}
+    if(!raw.size||raw.size>20*1024*1024){toast('附件需在 20 MB 以内');continue;}
+    const image=/^image\/(png|jpeg|webp|gif|heic|heif)$/.test(raw.type)||/\.(png|jpe?g|webp|gif|heic|heif)$/i.test(raw.name);
+    const file={name:raw.name||'截图.png',image,uploading:true,preview:image?URL.createObjectURL(raw):null};list.push(file);
+    if(threadId===currentId){renderAttachments();updateComposer();}
+    try{
+      const uploaded=await api('/api/uploads?'+new URLSearchParams({threadId,name:file.name,image:image?'1':'0'}),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:raw});
+      Object.assign(file,uploaded);
+      if(file.removed)await api('/api/uploads/'+file.id,{method:'DELETE'});
+    }catch(err){file.error=true;if(!file.removed)toast(err.message);}
+    finally{file.uploading=false;if(threadId===currentId){renderAttachments();updateComposer();}}
+  }
+}
 const contexts = new Map(), inputDrafts = new Map(), inputStates = new Map();
 const expandedHistorical=new Set();
 const threadCompletion = new Map();
@@ -113,6 +150,8 @@ function post(path, data) { return api(path, { method: 'POST', body: JSON.string
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 5500); }
 function banner(text) { $('banner').textContent = text || ''; $('banner').hidden = !text; }
 function showPair() {
+  for(const files of attachmentDrafts.values())for(const file of files){file.removed=true;if(file.preview)URL.revokeObjectURL(file.preview);}
+  attachmentDrafts.clear();$('draft-attachments').replaceChildren();$('draft-attachments').hidden=true;
   disconnect(); $('pair-view').hidden = false; $('workspace').hidden = true;
   csrf = null; writable = false; currentId = null; messageMap.clear(); messageNodes.clear(); messageOrder = [];
   notices.reset();collapseNotice();$('notifications-overlay').hidden=true;renderNotices();
@@ -244,7 +283,10 @@ function setConnection(text, connected, desktopConnected = connected) {
 }
 function updateComposer() {
   $('draft').disabled = !currentId;
-  $('send').disabled = !writable || (busy && activeProvider !== 'codex') || sending || uncertain || !$('draft').value.trim();
+  const files=currentAttachments();
+  $('send').disabled = !writable || (busy && activeProvider !== 'codex') || sending || uncertain || files.some(f=>f.uploading||f.error) || (!$('draft').value.trim()&&!files.length);
+  $('attach-image').disabled=$('attach-file').disabled=!currentId||sending||uncertain||activeProvider!=='codex';
+  for(const button of $('draft-attachments').querySelectorAll('button'))button.disabled=sending||uncertain;
   const steering = busy && activeProvider === 'codex';
   $('send').textContent = steering ? '引导' : '↑'; $('send').classList.toggle('steer',steering);
   $('send').setAttribute('aria-label',steering ? '发送引导消息' : '发送消息');
@@ -331,15 +373,6 @@ function updateJump() {
   $('jump-bottom').hidden = !away || !messageOrder.length;
   if (!away) hasUnread = false;
   $('new-message-label').hidden = !hasUnread;
-}
-async function copyText(text) {
-  if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return; }
-  const selected = document.activeElement;
-  const input = document.createElement('textarea'); input.value = text;
-  input.style.position = 'fixed'; input.style.left = '-9999px'; document.body.append(input);
-  input.focus(); input.select(); input.setSelectionRange(0, text.length);
-  const copied = document.execCommand('copy'); input.remove(); selected?.focus();
-  if (!copied) throw new Error('无法复制，请长按选择文本');
 }
 function uuid() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
@@ -489,12 +522,19 @@ function renderMessage(message) {
       const expand = document.createElement('button'); expand.className = 'expand-following'; expand.type = 'button';
       expand.onclick = () => toggleExpansion(message.id);
       actions.append(expand); el.append(actions);
+      const copy=document.createElement('button');copy.type='button';copy.className='copy-message';copy.textContent='⧉ 复制';copy.setAttribute('aria-label','复制这条消息');
+      copy.onclick=()=>copyText(message.text).then(()=>toast('已复制消息')).catch(err=>toast(err.message));actions.append(copy);
     }
     if (message.role === 'assistant') {
       const actions = document.createElement('div'); actions.className = 'message-actions';
-      const copy = document.createElement('button'); copy.textContent = '复制'; copy.setAttribute('aria-label', '复制这条回复');
+      const copy = document.createElement('button'); copy.type='button';copy.textContent = '⧉ 复制'; copy.setAttribute('aria-label', '复制这条回复');
       copy.onclick = async () => { try { await copyText(message.text); toast('已复制回复'); } catch (err) { toast(err.message); } };
       actions.append(copy); el.append(actions);
+      if(activeProvider==='codex'&&message.kind!=='question'){
+        const branch=document.createElement('button');branch.type='button';branch.className='branch-message';branch.textContent='⑂ 分支';branch.setAttribute('aria-label','从这条回复分支到新会话');branch.disabled=!message.branchable;
+        branch.title=message.branchable?'保留到这条回复为止的记录，新建独立会话':'该轮尚未结束或历史暂不支持按位置分支';
+        branch.onclick=()=>{branchSelection={threadId:currentId,messageId:message.id,title:$('thread-title').textContent};$('branch-error').textContent='';$('confirm-branch').disabled=false;$('branch-dialog').showModal();};actions.append(branch);
+      }
       if (message.kind === 'question' && !message.questionAnswered) {
         const answer = document.createElement('button'); answer.type = 'button'; answer.className = 'answer-question';
         answer.textContent = '前往回答'; answer.hidden = true;
@@ -897,6 +937,7 @@ async function openThread(id, title) {
   currentServiceTier=null;currentServiceTierKnown=false;
   messageMap.clear(); messageNodes.clear(); messageOrder = []; recentIds = new Set(); recentTurnIds = new Set(); $('messages').replaceChildren(); $('requests').replaceChildren();
   $('empty').hidden = true; $('thread-title').textContent = title || '正在加载会话'; $('draft').value = drafts.get(id) || '';
+  renderAttachments();$('attach-menu').open=false;
   sessionStorage.setItem('rc_thread', id); setSidebar(false); banner(''); offline(''); setConnection('正在读取最近消息…', false); updateComposer();
   sessionStorage.setItem('rc_thread_' + activeProvider, id); $('integration-panel').hidden = true;
   for (const el of $('threads').children) el.classList.toggle('selected', el.dataset.id === id);
@@ -996,15 +1037,34 @@ $('image-overlay').onclick = event => { if (event.target === $('image-overlay'))
 $('full-image').onerror = () => { $('image-caption').textContent = '原图片已删除或无法读取，请关闭后刷新会话重试'; };
 $('draft').oninput = () => { $('draft').style.height = 'auto'; $('draft').style.height = Math.min(140, $('draft').scrollHeight) + 'px'; updateComposer(); };
 $('draft').onkeydown = event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !$('send').disabled) { event.preventDefault(); $('send').click(); } };
+$('draft').addEventListener('paste',event=>{const files=Array.from(event.clipboardData?.files||[]);if(files.length){event.preventDefault();const text=event.clipboardData.getData('text/plain');if(text){const draft=$('draft');draft.setRangeText(text,draft.selectionStart,draft.selectionEnd,'end');draft.dispatchEvent(new Event('input'));}addAttachments(files);}});
+$('attach-image').onclick=()=>{$('attach-menu').open=false;$('image-upload').click();};
+$('attach-file').onclick=()=>{$('attach-menu').open=false;$('file-upload').click();};
+for(const id of ['image-upload','file-upload'])$(id).onchange=()=>{addAttachments(Array.from($(id).files||[]));$(id).value='';};
+$('cancel-branch').onclick=()=>$('branch-dialog').close();
+$('confirm-branch').onclick=async()=>{
+  const selection=branchSelection;if(!selection)return;
+  const key=selection.threadId+':'+selection.messageId;let requestId=forkRequests.get(key);try{requestId ||= sessionStorage.getItem('rc_fork_'+key);}catch{}
+  if(!requestId){requestId=uuid();forkRequests.set(key,requestId);try{sessionStorage.setItem('rc_fork_'+key,requestId);}catch{}}
+  $('confirm-branch').disabled=true;$('branch-error').textContent='正在创建分支…';
+  try{
+    const result=await post(`/api/threads/${selection.threadId}/fork`,{messageId:selection.messageId,requestId});
+    $('branch-dialog').close();await loadThreads();
+    if(currentId===selection.threadId){await openThread(result.id,result.title);if(desktopOpenAvailable){await post(`/api/threads/${result.id}/open-desktop`,{});connectEvents(result.id,openGeneration);}}
+    toast('分支已创建，原会话和草稿已保留');
+  }catch(err){$('branch-error').textContent=err.message;if(!err.unknown){forkRequests.delete(key);try{sessionStorage.removeItem('rc_fork_'+key);}catch{}$('confirm-branch').disabled=false;}}
+};
 $('send').onclick = async () => {
   if ($('send').disabled) return;
   const text = $('draft').value.trim(), id = currentId, generation = openGeneration, messageId = uuid();
   sending = true; updateComposer();
   try {
-    const result = await post(threadPath(id, 'send'), { text, messageId, mode:busy && activeProvider === 'codex' ? 'steer' : 'message', skillIds: selectedSkills.map(s => s.id), referenceIds: selectedThreads.map(t => t.id) });
+    const files=currentAttachments().slice();
+    const result = await post(threadPath(id, 'send'), { text, messageId, uploadIds:files.map(f=>f.id), mode:busy && activeProvider === 'codex' ? 'steer' : 'message', skillIds: selectedSkills.map(s => s.id), referenceIds: selectedThreads.map(t => t.id) });
+    const remaining=(attachmentDrafts.get(id)||[]).filter(f=>!files.includes(f));attachmentDrafts.set(id,remaining);for(const file of files)if(file.preview)URL.revokeObjectURL(file.preview);
     drafts.delete(id);
     contexts.delete(id);
-    if (generation === openGeneration) { selectedSkills = []; selectedThreads = []; renderContext(); $('draft').value = ''; $('draft').style.height = 'auto'; toast(result.kind === 'steered' ? '引导已追加到当前任务' : result.pending ? '已排入本机通道，等待 Claude Code 处理' : '已交给电脑上的 ' + providerNames[activeProvider]); }
+    if (generation === openGeneration) { selectedSkills = []; selectedThreads = []; renderContext();renderAttachments(); $('draft').value = ''; $('draft').style.height = 'auto'; toast(result.kind === 'steered' ? '引导已追加到当前任务' : result.pending ? '已排入本机通道，等待 Claude Code 处理' : '已交给电脑上的 ' + providerNames[activeProvider]); }
   } catch (err) {
     if (generation === openGeneration && (err.unknown || err instanceof TypeError)) { uncertain = true; banner('发送结果暂时无法确认。请先核对桌面是否收到，避免重复发送。'); }
     toast(err.message);

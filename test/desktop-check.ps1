@@ -37,8 +37,20 @@ try {
 $desktop = Join-Path $TestRoot ('desktop space ' + [char]0x6D4B + [char]0x8BD5)
 New-Item -ItemType Directory -Path $desktop | Out-Null
 function Run-Shortcut([string]$Directory) {
-    $process = Start-Process -FilePath $executable -ArgumentList @('--create-shortcut', ('"{0}"' -f $Directory)) -Wait -PassThru -WindowStyle Hidden
-    return $process.ExitCode
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo.FileName = $executable
+    $process.StartInfo.Arguments = '--create-shortcut "' + $Directory + '"'
+    $process.StartInfo.UseShellExecute = $false
+    $process.StartInfo.CreateNoWindow = $true
+    $process.StartInfo.RedirectStandardError = $true
+    try {
+        if (-not $process.Start()) { throw 'Could not launch shortcut command.' }
+        $details = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        $code = $process.ExitCode
+        if ($code -ne 0 -and $details) { Write-Host $details }
+        return $code
+    } finally { $process.Dispose() }
 }
 if ((Run-Shortcut $desktop) -ne 0) { throw 'Shortcut creation failed.' }
 $path = Join-Path $desktop 'Remote Coding.lnk'

@@ -55,8 +55,12 @@ function Run-Shortcut([string]$Directory) {
 if ((Run-Shortcut $desktop) -ne 0) { throw 'Shortcut creation failed.' }
 $path = Join-Path $desktop 'Remote Coding.lnk'
 $shell = New-Object -ComObject WScript.Shell
+# Independently inspect the saved link through WScript, but use an ASCII link
+# filename: WScript itself cannot save a Unicode path on English Windows.
+$inspection = Join-Path $TestRoot 'inspect.lnk'
 try {
-    $link = $shell.CreateShortcut($path)
+    Copy-Item -LiteralPath $path -Destination $inspection -Force
+    $link = $shell.CreateShortcut($inspection)
     try {
         if ($link.TargetPath -ne $executable) { throw 'Shortcut target mismatch.' }
         if ($link.WorkingDirectory.TrimEnd('\') -ne $TestRoot.TrimEnd('\')) { throw 'Shortcut working directory mismatch.' }
@@ -66,13 +70,16 @@ try {
         $link.Arguments = '--exit'
         $link.Save()
     } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+    Copy-Item -LiteralPath $inspection -Destination $path -Force
     if ((Run-Shortcut $desktop) -ne 0) { throw 'Shortcut update failed.' }
-    $link = $shell.CreateShortcut($path)
+    Copy-Item -LiteralPath $path -Destination $inspection -Force
+    $link = $shell.CreateShortcut($inspection)
     try {
         if ($link.Arguments -ne '') { throw 'Shortcut update did not clear old arguments.' }
         $link.TargetPath = Join-Path $TestRoot 'unrelated.exe'
         $link.Save()
     } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+    Copy-Item -LiteralPath $inspection -Destination $path -Force
     $before = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
     if ((Run-Shortcut $desktop) -eq 0) { throw 'Unrelated shortcut was not rejected.' }
     if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) -ne $before) { throw 'Unrelated shortcut was modified.' }

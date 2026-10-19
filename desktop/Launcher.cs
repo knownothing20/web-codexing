@@ -46,23 +46,27 @@ internal static class DesktopShortcut
         if (String.IsNullOrEmpty(directory) || !Directory.Exists(directory)) throw new IOException("找不到桌面目录，请确认桌面文件夹可用。");
         var path = Path.Combine(Path.GetFullPath(directory), "Remote Coding.lnk");
         var executable = Application.ExecutablePath;
-        object shell = null, shortcut = null;
+        object shortcut = null;
         try
         {
-            shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell", true));
-            shortcut = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { path });
+            shortcut = Activator.CreateInstance(Type.GetTypeFromCLSID(new Guid("00021401-0000-0000-C000-000000000046"), true));
+            var link = (IShellLinkW)shortcut;
+            var file = (System.Runtime.InteropServices.ComTypes.IPersistFile)shortcut;
             if (File.Exists(path))
             {
-                var target = Convert.ToString(shortcut.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null));
-                if (!String.Equals(target, executable, StringComparison.OrdinalIgnoreCase))
+                file.Load(path, 0);
+                var target = new StringBuilder(32768);
+                link.GetPath(target, target.Capacity, IntPtr.Zero, 4);
+                if (!String.Equals(target.ToString(), executable, StringComparison.OrdinalIgnoreCase))
                     throw new IOException("桌面已有同名快捷方式，指向其他位置。请先重命名或移走它，再重试。");
             }
-            Set(shortcut, "TargetPath", executable);
-            Set(shortcut, "WorkingDirectory", AppDomain.CurrentDomain.BaseDirectory);
-            Set(shortcut, "Arguments", "");
-            Set(shortcut, "IconLocation", executable + ",0");
-            Set(shortcut, "Description", "Remote Coding · 电脑上的 Codex，手机上接着聊");
-            shortcut.GetType().InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
+            link.SetPath(executable);
+            link.SetWorkingDirectory(AppDomain.CurrentDomain.BaseDirectory);
+            link.SetArguments("");
+            link.SetIconLocation(executable, 0);
+            link.SetDescription("Remote Coding · 电脑上的 Codex，手机上接着聊");
+            link.SetShowCmd(1);
+            file.Save(path, true);
             SHChangeNotify(0x2000, 0x0005, executable, IntPtr.Zero);
             SHChangeNotify(0x2000, 0x0005, path, IntPtr.Zero);
             return path;
@@ -70,11 +74,32 @@ internal static class DesktopShortcut
         finally
         {
             if (shortcut != null && Marshal.IsComObject(shortcut)) Marshal.FinalReleaseComObject(shortcut);
-            if (shell != null && Marshal.IsComObject(shell)) Marshal.FinalReleaseComObject(shell);
         }
     }
-    private static void Set(object shortcut, string name, string value)
-    { shortcut.GetType().InvokeMember(name, BindingFlags.SetProperty, null, shortcut, new object[] { value }); }
+    // Use the Unicode shell interface directly; WScript.Shell.Save loses paths
+    // outside the system ANSI code page on some Windows installations.
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellLinkW
+    {
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity, IntPtr data, uint flags);
+        void GetIDList(out IntPtr list);
+        void SetIDList(IntPtr list);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int capacity);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string path);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder text, int capacity);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string text);
+        void GetHotkey(out short hotkey);
+        void SetHotkey(short hotkey);
+        void GetShowCmd(out int show);
+        void SetShowCmd(int show);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder path, int capacity, out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        void Resolve(IntPtr window, uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+    }
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
     private static extern void SHChangeNotify(uint eventId, uint flags, string item, IntPtr other);
 }

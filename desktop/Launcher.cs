@@ -20,7 +20,7 @@ internal static class Program
         if (args.Length > 0 && args[0] == "--create-shortcut")
         {
             try { DesktopShortcut.Create(args.Length > 1 ? args[1] : null); return 0; }
-            catch (Exception e) { Console.Error.WriteLine("Shortcut creation failed: " + e.Message); return 1; }
+            catch (Exception e) { Console.Error.WriteLine("Shortcut creation failed: " + e.GetBaseException().Message); return 1; }
         }
         bool created;
         using (var mutex = new Mutex(true, @"Local\LeonRemoteCodingPrototype", out created))
@@ -162,7 +162,7 @@ internal sealed class ControlPanel : Form
             DesktopShortcut.Create(null);
             MessageBox.Show(this, "已创建桌面快捷方式，下次双击桌面的 Remote Coding 即可启动。\n\n请保留原程序文件夹，快捷方式会从这里启动。", "桌面快捷方式已创建", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
-        catch (Exception e) { MessageBox.Show(this, e.Message, "快捷方式创建失败", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        catch (Exception e) { MessageBox.Show(this, e.GetBaseException().Message, "快捷方式创建失败", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
     }
     private void StartBridge()
     {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +8,8 @@ import { execFileSync } from 'node:child_process';
 
 test('Windows launcher embeds a shell icon and creates safe, working desktop shortcuts', { skip:process.platform !== 'win32', timeout:60000 }, () => {
   const root = fileURLToPath(new URL('..', import.meta.url));
-  const scratch = mkdtempSync(join(tmpdir(), 'remote-coding-desktop-'));
+  // Windows CI exposes an 8.3 temp alias; COM returns canonical long paths.
+  const scratch = realpathSync.native(mkdtempSync(join(tmpdir(), 'remote-coding-desktop-')));
   try {
     const output = execFileSync('powershell.exe', [
       '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'test', 'desktop-check.ps1'),

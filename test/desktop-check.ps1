@@ -1,0 +1,70 @@
+param([Parameter(Mandatory=$true)][string]$ProjectRoot, [Parameter(Mandatory=$true)][string]$TestRoot)
+$ErrorActionPreference = 'Stop'
+$executable = Join-Path $TestRoot 'Remote Coding.exe'
+& (Join-Path $ProjectRoot 'build.ps1') -OutputPath $executable | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Launcher build failed.' }
+
+Add-Type -AssemblyName System.Drawing
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ShellIconCheck {
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode)]
+    public static extern uint ExtractIconEx(string file, int index, IntPtr large, IntPtr small, uint count);
+}
+'@
+if ([ShellIconCheck]::ExtractIconEx($executable, -1, [IntPtr]::Zero, [IntPtr]::Zero, 0) -lt 1) { throw 'EXE has no shell icon.' }
+$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($executable)
+try {
+    $bitmap = $icon.ToBitmap()
+    try {
+        $bitmap.Save((Join-Path $TestRoot 'shell-icon.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+        $green = $bitmap.GetPixel([int]($bitmap.Width / 2), [int]($bitmap.Height / 6))
+        if ($green.G -le $green.R -or $green.G -le $green.B) { throw 'Shell icon does not contain application artwork.' }
+    } finally { $bitmap.Dispose() }
+} finally { $icon.Dispose() }
+$assembly = [Reflection.Assembly]::LoadFile($executable)
+$stream = $assembly.GetManifestResourceStream('RemoteCoding.Icon')
+try {
+    if ($null -eq $stream) { throw 'Missing window/tray icon resource.' }
+    $file = [IO.File]::Create((Join-Path $TestRoot 'embedded.ico'))
+    try { $stream.CopyTo($file) } finally { $file.Dispose() }
+    $stream.Position = 0
+    $embedded = New-Object System.Drawing.Icon($stream, 32, 32)
+    $embedded.Dispose()
+} finally { if ($null -ne $stream) { $stream.Dispose() } }
+
+$desktop = Join-Path $TestRoot ('desktop space ' + [char]0x6D4B + [char]0x8BD5)
+New-Item -ItemType Directory -Path $desktop | Out-Null
+function Run-Shortcut([string]$Directory) {
+    $process = Start-Process -FilePath $executable -ArgumentList @('--create-shortcut', ('"{0}"' -f $Directory)) -Wait -PassThru -WindowStyle Hidden
+    return $process.ExitCode
+}
+if ((Run-Shortcut $desktop) -ne 0) { throw 'Shortcut creation failed.' }
+$path = Join-Path $desktop 'Remote Coding.lnk'
+$shell = New-Object -ComObject WScript.Shell
+try {
+    $link = $shell.CreateShortcut($path)
+    try {
+        if ($link.TargetPath -ne $executable) { throw 'Shortcut target mismatch.' }
+        if ($link.WorkingDirectory.TrimEnd('\') -ne $TestRoot.TrimEnd('\')) { throw 'Shortcut working directory mismatch.' }
+        if ($link.IconLocation -ne ($executable + ',0')) { throw 'Shortcut icon mismatch.' }
+        if ($link.Arguments -ne '') { throw 'Unexpected shortcut arguments.' }
+        if ($link.Description -notlike 'Remote Coding*') { throw 'Shortcut description missing.' }
+        $link.Arguments = '--exit'
+        $link.Save()
+    } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+    if ((Run-Shortcut $desktop) -ne 0) { throw 'Shortcut update failed.' }
+    $link = $shell.CreateShortcut($path)
+    try {
+        if ($link.Arguments -ne '') { throw 'Shortcut update did not clear old arguments.' }
+        $link.TargetPath = Join-Path $TestRoot 'unrelated.exe'
+        $link.Save()
+    } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) | Out-Null }
+    $before = [Convert]::ToBase64String([IO.File]::ReadAllBytes($path))
+    if ((Run-Shortcut $desktop) -eq 0) { throw 'Unrelated shortcut was not rejected.' }
+    if ([Convert]::ToBase64String([IO.File]::ReadAllBytes($path)) -ne $before) { throw 'Unrelated shortcut was modified.' }
+    $missing = Join-Path $TestRoot 'missing'
+    if ((Run-Shortcut $missing) -eq 0 -or (Test-Path -LiteralPath $missing)) { throw 'Missing directory was not handled safely.' }
+} finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null }
+Write-Output 'Desktop checks passed: native EXE icon, embedded tray icon, shortcut target/icon/working directory, Unicode paths, repeat update, conflict preservation, missing directory.'

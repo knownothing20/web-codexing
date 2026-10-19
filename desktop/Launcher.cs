@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -12,22 +14,69 @@ using System.Windows.Forms;
 internal static class Program
 {
     [STAThread]
-    private static void Main(string[] args)
+    private static int Main(string[] args)
     {
-        if (args.Length > 0 && args[0] == "--exit") { Signal("Stop"); return; }
+        if (args.Length > 0 && args[0] == "--exit") { Signal("Stop"); return 0; }
+        if (args.Length > 0 && args[0] == "--create-shortcut")
+        {
+            try { DesktopShortcut.Create(args.Length > 1 ? args[1] : null); return 0; }
+            catch (Exception e) { Console.Error.WriteLine("Shortcut creation failed: " + e.Message); return 1; }
+        }
         bool created;
         using (var mutex = new Mutex(true, @"Local\LeonRemoteCodingPrototype", out created))
         {
-            if (!created) { Signal("Show"); return; }
+            if (!created) { Signal("Show"); return 0; }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new ControlPanel());
         }
+        return 0;
     }
     private static void Signal(string name)
     {
         try { using (var e = EventWaitHandle.OpenExisting(@"Local\LeonRemoteCoding" + name)) e.Set(); } catch { }
     }
+}
+
+internal static class DesktopShortcut
+{
+    public static string Create(string directory)
+    {
+        if (directory == null) directory = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        if (String.IsNullOrEmpty(directory) || !Directory.Exists(directory)) throw new IOException("找不到桌面目录，请确认桌面文件夹可用。");
+        var path = Path.Combine(Path.GetFullPath(directory), "Remote Coding.lnk");
+        var executable = Application.ExecutablePath;
+        object shell = null, shortcut = null;
+        try
+        {
+            shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell", true));
+            shortcut = shell.GetType().InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { path });
+            if (File.Exists(path))
+            {
+                var target = Convert.ToString(shortcut.GetType().InvokeMember("TargetPath", BindingFlags.GetProperty, null, shortcut, null));
+                if (!String.Equals(target, executable, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("桌面已有同名快捷方式，指向其他位置。请先重命名或移走它，再重试。");
+            }
+            Set(shortcut, "TargetPath", executable);
+            Set(shortcut, "WorkingDirectory", AppDomain.CurrentDomain.BaseDirectory);
+            Set(shortcut, "Arguments", "");
+            Set(shortcut, "IconLocation", executable + ",0");
+            Set(shortcut, "Description", "Remote Coding · 电脑上的 Codex，手机上接着聊");
+            shortcut.GetType().InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
+            SHChangeNotify(0x2000, 0x0005, executable, IntPtr.Zero);
+            SHChangeNotify(0x2000, 0x0005, path, IntPtr.Zero);
+            return path;
+        }
+        finally
+        {
+            if (shortcut != null && Marshal.IsComObject(shortcut)) Marshal.FinalReleaseComObject(shortcut);
+            if (shell != null && Marshal.IsComObject(shell)) Marshal.FinalReleaseComObject(shell);
+        }
+    }
+    private static void Set(object shortcut, string name, string value)
+    { shortcut.GetType().InvokeMember(name, BindingFlags.SetProperty, null, shortcut, new object[] { value }); }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern void SHChangeNotify(uint eventId, uint flags, string item, IntPtr other);
 }
 
 internal sealed class ControlPanel : Form
@@ -84,10 +133,14 @@ internal sealed class ControlPanel : Form
             if (runtime == null || MessageBox.Show("所有已配对手机将需要重新配对。继续？", "撤销手机配对", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             try { LocalPost("/api/local/revoke-devices", "{}"); ReloadRuntime(); } catch (Exception e) { MessageBox.Show(e.Message, "撤销失败"); }
         };
-        Controls.AddRange(new Control[] { title, subtitle, status, qr, hint, pair, addresses, copy, lanMode, stats, error, revoke });
+        var shortcut = new LinkLabel { Text = "创建桌面快捷方式", Location = new Point(285, 626), Size = new Size(140, 24), LinkColor = Color.FromArgb(91, 111, 77) };
+        shortcut.LinkClicked += delegate { CreateDesktopShortcut(); };
+        Controls.AddRange(new Control[] { title, subtitle, status, qr, hint, pair, addresses, copy, lanMode, stats, error, revoke, shortcut });
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("显示连接面板", null, delegate { ShowPanel(); });
+        menu.Items.Add("创建桌面快捷方式", null, delegate { CreateDesktopShortcut(); });
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出 Remote Coding", null, delegate { ExitApp(); });
         tray.Icon = customIcon; tray.Text = "Remote Coding · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
         tray.DoubleClick += delegate { ShowPanel(); };
@@ -99,21 +152,18 @@ internal sealed class ControlPanel : Form
     }
     private static Icon CreateIcon()
     {
-        using (var bmp = new Bitmap(64, 64))
-        using (var g = Graphics.FromImage(bmp))
-        using (var pen = new Pen(Color.FromArgb(241, 247, 235), 5F))
-        {
-            g.Clear(Color.FromArgb(66, 107, 81));
-            g.DrawLines(pen, new Point[] { new Point(24, 18), new Point(12, 32), new Point(24, 46) });
-            g.DrawLines(pen, new Point[] { new Point(40, 18), new Point(52, 32), new Point(40, 46) });
-            g.DrawLine(pen, 36, 12, 28, 52);
-            var handle = bmp.GetHicon();
-            var icon = (Icon)Icon.FromHandle(handle).Clone();
-            DestroyIcon(handle);
-            return icon;
-        }
+        using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("RemoteCoding.Icon"))
+        using (var icon = new Icon(stream, new Size(32, 32))) return (Icon)icon.Clone();
     }
-    [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool DestroyIcon(IntPtr hIcon);
+    private void CreateDesktopShortcut()
+    {
+        try
+        {
+            DesktopShortcut.Create(null);
+            MessageBox.Show(this, "已创建桌面快捷方式，下次双击桌面的 Remote Coding 即可启动。\n\n请保留原程序文件夹，快捷方式会从这里启动。", "桌面快捷方式已创建", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception e) { MessageBox.Show(this, e.Message, "快捷方式创建失败", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+    }
     private void StartBridge()
     {
         try

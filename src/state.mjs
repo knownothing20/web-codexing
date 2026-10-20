@@ -1,4 +1,5 @@
 import { imageSources, videoSources } from './attachments.mjs';
+import { specialMessageFromItem } from './special-items.mjs';
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 
 export function applyPatches(state, patches) {
@@ -68,6 +69,8 @@ export function visibleUserText(text) {
 
 export function messageFromItem(item, turnId = '', index = 0) {
   const id = item.id || `${turnId}:${index}`;
+  const special = specialMessageFromItem(item, id, turnId);
+  if (special) return special;
   if (['userMessage', 'steeringUserMessage'].includes(item.type)) {
     const raw = contentText(item.content || item.input);
     const referenceAt = raw.lastIndexOf('\n\n## Referenced chats with Codex:\n');
@@ -103,7 +106,7 @@ export function messagesFromTurns(turns) {
       const m = messageFromItem(item, turn.turnId || turn.id, i);
       return m ? { ...m, branchable:turn.status === 'completed' && item === lastAgent && m.role === 'assistant' && m.phase !== 'commentary' && m.kind !== 'question', at: turn.turnStartedAtMs || null, timeSource: 'turn' } : null;
     }).filter(Boolean);
-    if (!items.some(i => i.type === 'userMessage') && turn.params?.input?.length) {
+    if (!messages.some(m => m.role === 'user') && turn.params?.input?.length) {
       const text = visibleUserText(contentText(turn.params.input));
       if (text) messages.unshift({ id: `input:${turn.turnId}`, turnId: turn.turnId, role: 'user', kind: 'message', text, at: turn.turnStartedAtMs || null, timeSource: 'turn' });
     }

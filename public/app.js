@@ -463,10 +463,10 @@ function markdown(text, message=null, depth=0) {
   flush(); return frag;
 }
 function renderMessage(message) {
-  const el = document.createElement('article'); el.className = `message ${message.role}${message.phase === 'commentary' ? ' progress' : ''}${message.kind === 'question' ? ' question-message' : ''}${message.guidance ? ' guidance-message' : ''}`; el.dataset.id = message.id;
+  const el = document.createElement('article'); el.className = `message ${message.role}${message.phase === 'commentary' ? ' progress' : ''}${message.kind === 'question' ? ' question-message' : ''}${message.guidance ? ' guidance-message' : ''}${message.kind === 'forwarded' ? ' forwarded-message' : ''}${message.kind === 'automation' ? ' automation-message' : ''}`; el.dataset.id = message.id;
   if (message.role === 'assistant' && message.phase !== 'commentary') {
     const label = document.createElement('div'); label.className = 'message-label';
-    label.textContent = message.kind === 'question' ? (message.questionAnswered ? '◎  Codex · 已回应的操作询问' : '◎  Codex · 历史询问（已结束）') : '◎  ' + providerNames[activeProvider]; el.append(label);
+    label.textContent = message.kind === 'automation' ? '◷  定时任务' : message.kind === 'question' ? (message.questionAnswered ? '◎  Codex · 已回应的操作询问' : '◎  Codex · 历史询问（已结束）') : '◎  ' + providerNames[activeProvider]; el.append(label);
     addTime(label, message);
   }
   const body = document.createElement('div'); body.className = 'message-body';
@@ -495,7 +495,40 @@ function renderMessage(message) {
     if (/^(?:# Files mentioned by the user:|# Response annotations:|<response-annotations>|<in-app-browser-context\b|<external_codex_apps_open_page>)/.test(text.trimStart()) && text.includes('## My request:')) {
       text = text.slice(text.lastIndexOf('## My request:') + '## My request:'.length).trim();
     }
-    body.append(document.createTextNode(text));
+    if (message.kind === 'forwarded') {
+      const heading = document.createElement('div'); heading.className = 'forwarded-heading';
+      const label = document.createElement('span'); label.textContent = '↗ 来自其他会话'; heading.append(label);
+      if (/^[a-f0-9-]{36}$/i.test(message.forwarded?.threadId || '')) {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = '查看来源';
+        button.onclick = () => openThread(message.forwarded.threadId, '来源会话'); heading.append(button);
+      }
+      body.append(heading);
+      if (text.length > 280 || text.split('\n').length > 6) {
+        const details = document.createElement('details'); details.className = 'forward-content';
+        details.open = messageNodes.get(message.id)?.querySelector('.forward-content')?.open || false;
+        const summary = document.createElement('summary'), preview = document.createElement('span'), toggle = document.createElement('span');
+        preview.className = 'forward-preview'; preview.textContent = text.replace(/\s+/g, ' ').slice(0, 140) + '…';
+        toggle.className = 'forward-toggle'; toggle.textContent = details.open ? '收起全文' : '展开全文';
+        const full = document.createElement('div'); full.className = 'forward-text'; full.textContent = text;
+        summary.append(preview, toggle); details.append(summary, full);
+        details.addEventListener('toggle', () => { toggle.textContent = details.open ? '收起全文' : '展开全文'; updateJump(); });
+        body.append(details);
+      } else { const full = document.createElement('div'); full.className = 'forward-text'; full.textContent = text; body.append(full); }
+    } else body.append(document.createTextNode(text));
+  } else if (message.kind === 'automation' && message.automation) {
+    const task = message.automation; body.classList.add('automation-card');
+    const heading = document.createElement('div'); heading.className = 'automation-heading';
+    const title = document.createElement('strong'); title.textContent = task.name;
+    const status = document.createElement('span'); status.className = 'automation-status';
+    status.textContent = ({ACTIVE:'记录：启用',PAUSED:'记录：暂停'})[task.status] || '状态未记录';
+    heading.append(title, status);
+    const frequency = document.createElement('div'); frequency.className = 'automation-frequency'; frequency.textContent = task.frequency;
+    const details = document.createElement('details'); details.className = 'automation-details';
+    details.open = messageNodes.get(message.id)?.querySelector('.automation-details')?.open || false;
+    const summary = document.createElement('summary'); summary.textContent = '查看详情';
+    const note = document.createElement('p'); note.textContent = ({create:'此消息创建了该任务。',update:'此消息更新了该任务。',view:'此消息查看了该任务。'})[task.action] + '任务可能已更新，当前设置请在电脑端查看。';
+    details.append(summary, note); details.addEventListener('toggle', updateJump);
+    body.append(heading, frequency, details);
   } else {
     const text = (message.mediaText??message.text).replace(/:codex-annotation\{index="\d+"\}/g, '');
     const placedIds=new Set([...text.matchAll(/^\s*\[rc-media:([a-f0-9]{64})\]\s*$/gm)].map(m=>m[1]));
@@ -530,7 +563,7 @@ function renderMessage(message) {
       const copy = document.createElement('button'); copy.type='button';copy.textContent = '⧉ 复制'; copy.setAttribute('aria-label', '复制这条回复');
       copy.onclick = async () => { try { await copyText(message.text); toast('已复制回复'); } catch (err) { toast(err.message); } };
       actions.append(copy); el.append(actions);
-      if(activeProvider==='codex'&&message.kind!=='question'){
+      if(activeProvider==='codex'&&message.kind!=='question'&&message.kind!=='automation'){
         const branch=document.createElement('button');branch.type='button';branch.className='branch-message';branch.textContent='⑂ 分支';branch.setAttribute('aria-label','从这条回复分支到新会话');branch.disabled=!message.branchable;
         branch.title=message.branchable?'保留到这条回复为止的记录，新建独立会话':'该轮尚未结束或历史暂不支持按位置分支';
         branch.onclick=()=>{branchSelection={threadId:currentId,messageId:message.id,title:$('thread-title').textContent};$('branch-error').textContent='';$('confirm-branch').disabled=false;$('branch-dialog').showModal();};actions.append(branch);

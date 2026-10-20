@@ -14,12 +14,13 @@ const fixture = mkdtempSync(join(base, 'ui-test-')), id = randomUUID(), pipe = '
 const historicalMode=process.argv.includes('--history-notifications');
 const noticeMode=process.argv.includes('--notifications')||historicalMode;
 const recentMode=process.argv.includes('--recent');
-const statusMode=process.argv.includes('--status')||noticeMode||recentMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
+const specialMode=process.argv.includes('--special');
+const statusMode=process.argv.includes('--status')||noticeMode||recentMode||specialMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
 const mediaDetailsMode=process.argv.includes('--media-details');
 const mediaMode=process.argv.includes('--media')||mediaDetailsMode;
 const actionsMode=process.argv.includes('--actions');
-const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode;
+const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode||specialMode;
 let ownerReads=0,fullFollows=0;const checkedIds=new Set();
 const metrics=()=>{if(manyMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows}));};
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
@@ -44,6 +45,17 @@ const otherState={id:otherId,title:'另一个会话 · 隔离测试',threadRunti
 const unloadedState={...otherState,id:unloadedId,title:'尚未打开 · 隔离测试'};
 const requestTemplate=structuredClone(state.requests);
 if(settingsMode){state.latestModel='demo-fast';state.latestReasoningEffort='high';state.latestThreadSettings={model:'demo-fast',serviceTier:'priority'};state.requests=[];state.threadRuntimeStatus={type:'idle'};state.turns[0].status='completed';}
+if(specialMode){
+  state.title='转发消息与定时任务 · 手机预览';
+  const text='请帮我核对项目的恢复进度，并保留当前环境。\n\n'+['保留原端口与数据。','逐项提供可核对的结果。','只读检查，不启动付费调用。','需要操作时先在原会话确认。'].join('\n')+'\n\n这是一条来自其他会话的长消息，用于检查手机上的全文展开、来源跳转和草稿保留。'.repeat(4);
+  state.turns[0].items=[{id:'forward-demo',type:'functionCallOutput',name:'send_message_to_thread',namespace:'codex_app',output:`<codex_delegation>\n<source_thread_id>${otherId}</source_thread_id>\n<input>${text}</input>\n</codex_delegation>`},
+    {id:'special-reply',type:'agentMessage',text:'已收到来自另一条会话的协调消息。检查结果会继续显示在这里。'},
+    {id:'automation-demo',type:'mcpToolCall',server:'codex_app',tool:'automation_update',status:'completed',arguments:{mode:'create',name:'跟进项目恢复进度',rrule:'FREQ=MINUTELY;INTERVAL=5',status:'ACTIVE',prompt:'INTERNAL_TASK_PROMPT'},result:{content:[{type:'text',text:JSON.stringify({automationId:'demo-check',mode:'create',status:'ACTIVE'})}]}},
+    {id:'private-tool',type:'commandExecution',aggregatedOutput:'INTERNAL_TOOL_OUTPUT'}];
+  const s=new DatabaseSync(join(fixture,'state_5.sqlite'));s.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);s.close();
+  const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.prepare('DELETE FROM thread_items WHERE thread_id=?').run(id);h.prepare('UPDATE thread_turns SET status=? WHERE thread_id=?').run('completed',id);
+  state.turns[0].items.forEach((item,i)=>h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,'turn',i+1,item.id,item.type,JSON.stringify(item),Date.now()));h.close();
+}
 if(actionsMode){
   const {default:sharp}=await import('sharp');
   await sharp(Buffer.from('<svg width="900" height="550"><rect width="900" height="550" fill="#e9f0e6"/><text x="70" y="145" font-size="42" fill="#426b51">SCREENSHOT PREVIEW</text><text x="70" y="230" font-size="25" fill="#426b51">Paste on PC / Upload on phone</text></svg>')).png().toFile(join(fixture,'screenshot.png'));
@@ -138,6 +150,10 @@ console.log(JSON.stringify({url:`http://127.0.0.1:${runtime.port}/`,pairCode:run
 let stopping=false;
 async function stop(){if(stopping)return;stopping=true;const exited=child.exitCode===null?new Promise(resolve=>child.once('exit',resolve)):Promise.resolve();child.kill();for(const s of sockets)s.destroy();await exited; await new Promise(resolve=>fake.close(resolve));if(!resolve(fixture).startsWith(base+'\\'))throw new Error('unsafe fixture cleanup');rmSync(fixture,{recursive:true,force:true,maxRetries:10,retryDelay:50});process.exit(0);}
 const command = line => {
+  if(specialMode&&line.trim()==='special-update'){
+    const task=state.turns[0].items.find(i=>i.id==='automation-demo');task.arguments.status='PAUSED';task.result.content[0].text=JSON.stringify({automationId:'demo-check',status:'PAUSED'});
+    for(const socket of sockets)broadcast(socket);
+  }
   if(mediaMode&&line.trim()==='media-error'){
     const path=join(fixture,'unsupported.mp4');writeFileSync(path,Buffer.concat([Buffer.from([0,0,0,24]),Buffer.from('ftypisom'),Buffer.alloc(128)]));
     state.turns[0].items.push({id:'bad-media',type:'agentMessage',phase:'final_answer',text:`[格式测试视频](${path})`});

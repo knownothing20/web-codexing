@@ -3,6 +3,7 @@ import { existsSync, openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { messageFromItem, visibleUserText, asyncQuestions } from './state.mjs';
+import { specialHistorySql } from './special-items.mjs';
 
 export class Catalog {
   constructor(home = process.env.CODEX_HOME || join(homedir(), '.codex')) {
@@ -96,7 +97,7 @@ export class Catalog {
     const row = this.get(id);
     if (!row) throw new Error('会话不存在或已归档');
     const items = this.history?.prepare(`SELECT item_id,turn_id,rollout_ordinal,item_json,created_at_ms FROM thread_items
-      WHERE thread_id=? AND rollout_ordinal<? AND item_type IN ('userMessage','agentMessage','steeringUserMessage')
+      WHERE thread_id=? AND rollout_ordinal<? AND ${specialHistorySql}
       ORDER BY rollout_ordinal DESC LIMIT ?`).all(id, before ?? Number.MAX_SAFE_INTEGER, limit + 1) || [];
     if (!items.length) {
       if (this.history?.prepare('SELECT 1 FROM thread_items WHERE thread_id=? LIMIT 1').get(id)) return { messages: [], cursor: null };
@@ -150,8 +151,14 @@ export class Catalog {
         pos += Buffer.byteLength(line) + 1;
         try {
           const e = JSON.parse(line);
-          if (e.type !== 'response_item' || e.payload?.type !== 'message') continue;
+          if (e.type !== 'response_item') continue;
           const p = e.payload;
+          if (p?.type === 'function_call_output') {
+            const forwarded = messageFromItem({...p, id:p.id || `legacy:${linePos}`});
+            if (forwarded?.kind === 'forwarded') found.push({...forwarded, at:e.timestamp ? Date.parse(e.timestamp) : null, timeSource:'recorded', _pos:linePos});
+            continue;
+          }
+          if (p?.type !== 'message') continue;
           if (!['user', 'assistant'].includes(p.role)) continue;
           const raw = (p.content || []).filter(c => ['input_text', 'output_text'].includes(c.type)).map(c => c.text).join('\n');
           const text = p.role === 'user' ? visibleUserText(raw) : raw;

@@ -29,6 +29,21 @@
 .thread-row small>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .message.user.guidance-message .message-body{background:#e6f1fc;border:1px solid #c8dff4;color:#294b6a}
 .guidance-badge{display:block;font-size:10px;font-weight:600;color:#4d82b0;margin-bottom:5px;letter-spacing:.2px}
+.message.forwarded-message .message-body{background:#edf2f9;border:1px solid #d8e2f0;white-space:normal}
+.forwarded-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;color:#627b9a;font-size:11px;line-height:1.6;margin-bottom:9px}
+.forwarded-heading button{color:#426d9d;font-size:11px;padding:5px 2px;min-height:32px;white-space:nowrap}
+.forward-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.forward-content summary{list-style:none;cursor:pointer}.forward-content summary::-webkit-details-marker{display:none}
+.forward-preview{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;white-space:normal}
+.forward-toggle{display:block;font-size:11px;color:#627b9a;margin-top:6px}
+.forward-content[open] .forward-preview{display:none}.forward-content[open] .forward-text{margin-top:9px}
+.automation-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px 10px;border:1px solid #dce4d8;background:#f2f5ee;border-radius:13px;padding:13px 16px;white-space:normal}
+.automation-heading{grid-column:1/-1;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;font-size:14px;line-height:1.6}
+.automation-heading strong{overflow-wrap:anywhere;min-width:0;font-weight:600}
+.automation-status{flex-shrink:0;font-size:10px;border-radius:5px;background:#e5ecdf;color:#63755a;padding:2px 6px;margin-top:2px}
+.automation-frequency{font-size:12px;color:var(--muted);align-self:center}
+.automation-details{font-size:11px;color:var(--muted)}.automation-details[open]{grid-column:1/-1}.automation-details summary{cursor:pointer;min-height:32px;display:flex;align-items:center}
+.automation-details p{margin:4px 0 0;line-height:1.8}
 .send-button.steer{width:auto;min-width:44px;padding:0 12px;font-size:12px;border-radius:11px}
 .quota-card{margin:0 3px 15px;padding:11px 12px;border:1px solid #dce3d5;background:#f8faf5;border-radius:12px;flex-shrink:0}
 .quota-heading{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#4d6650}

@@ -1,5 +1,6 @@
 import { imageSources, videoSources } from './attachments.mjs';
 import { specialMessageFromItem } from './special-items.mjs';
+import { referencedUserText } from './references.mjs';
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 
 export function applyPatches(state, patches) {
@@ -73,16 +74,9 @@ export function messageFromItem(item, turnId = '', index = 0) {
   if (special) return special;
   if (['userMessage', 'steeringUserMessage'].includes(item.type)) {
     const raw = contentText(item.content || item.input);
-    const referenceAt = raw.lastIndexOf('\n\n## Referenced chats with Codex:\n');
-    let references = [];
-    if (referenceAt >= 0) {
-      try {
-        const parsed = JSON.parse(raw.slice(raw.lastIndexOf('\n') + 1));
-        if (Array.isArray(parsed) && parsed.every(r => /^[0-9a-f-]{36}$/.test(r.threadId || '') && typeof r.title === 'string')) references = parsed.map(r => ({ id: r.threadId, title: r.title.slice(0, 100) }));
-      } catch {}
-    }
+    const referenced = referencedUserText(raw), references = referenced.references;
     const attachments = raw.trimStart().startsWith('# Files mentioned by the user:') ? [...raw.matchAll(/^## ([^\n]+?): [^\n]+$/gm)].map(m => m[1]).filter(name => name !== 'My request') : [];
-    return { id, turnId, role: 'user', text: visibleUserText(references.length ? raw.slice(0, referenceAt) : raw), attachments, references,
+    return { id, turnId, role: 'user', text: referenced.contextPrefix ? referenced.text : visibleUserText(referenced.text), attachments, references,
       skills: (item.content || item.input || []).filter?.(c => c.type === 'skill').map(c => c.name) || [],
       imageSources: imageSources(item, raw), videoSources: videoSources(item, raw),
       questionReply: raw.startsWith('<send_user_message_question_reply>'),

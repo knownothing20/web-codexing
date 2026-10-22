@@ -4,6 +4,7 @@ import { join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { messageFromItem, visibleUserText, asyncQuestions } from './state.mjs';
 import { specialHistorySql } from './special-items.mjs';
+import {displayItemSql,generatedHistorySql,groupGeneratedImages} from './generated-images.mjs';
 
 export class Catalog {
   constructor(home = process.env.CODEX_HOME || join(homedir(), '.codex')) {
@@ -96,7 +97,7 @@ export class Catalog {
   historyPage(id, before = null, limit = 60) {
     const row = this.get(id);
     if (!row) throw new Error('会话不存在或已归档');
-    const items = this.history?.prepare(`SELECT item_id,turn_id,rollout_ordinal,item_json,created_at_ms FROM thread_items
+    const items = this.history?.prepare(`SELECT item_id,turn_id,rollout_ordinal,${displayItemSql} AS item_json,created_at_ms FROM thread_items
       WHERE thread_id=? AND rollout_ordinal<? AND ${specialHistorySql}
       ORDER BY rollout_ordinal DESC LIMIT ?`).all(id, before ?? Number.MAX_SAFE_INTEGER, limit + 1) || [];
     if (!items.length) {
@@ -113,7 +114,19 @@ export class Catalog {
       const last=this.history.prepare(`SELECT turn_id,item_id,MAX(rollout_ordinal) FROM thread_items WHERE thread_id=? AND turn_id IN (${slots}) AND item_type='agentMessage' GROUP BY turn_id`).all(id,...ids);
       for(const row of last)if(completed.has(row.turn_id))branchable.add(row.item_id);
     }
-    return { messages: page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), branchable:branchable.has(r.item_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length || m?.videoSources?.length),
+    const messages=page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), branchable:branchable.has(r.item_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length || m?.videoSources?.length);
+    const imageTurns=[...new Set(messages.filter(m=>m.kind==='generatedImages'||m.role==='assistant'&&m.kind==='message'&&m.phase!=='commentary').map(m=>m.turnId))];
+    // Complete a turn's image group even when the history cursor splits it.
+    let generatedOrder;
+    if(imageTurns.length){
+      const slots=imageTurns.map(()=>'?').join(',');
+      const generated=this.history.prepare(`SELECT turn_id,created_at_ms,${displayItemSql} AS item_json FROM thread_items
+        WHERE thread_id=? AND turn_id IN (${slots}) AND ${generatedHistorySql} ORDER BY rollout_ordinal LIMIT 2048`).all(id,...imageTurns);
+      const known=new Set(messages.filter(m=>m.kind==='generatedImages').map(m=>m.id));
+      for(const row of generated){const m=messageFromItem(JSON.parse(row.item_json),row.turn_id);if(m&&!known.has(m.id))messages.push({...m,at:row.created_at_ms,timeSource:'recorded'});}
+      generatedOrder=new Map(generated.map((r,i)=>[JSON.parse(r.item_json).id,i]));
+    }
+    return { messages: groupGeneratedImages(messages,generatedOrder),
       cursor: hasMore ? page[0].rollout_ordinal : null };
   }
   branchPoint(id,messageId) {

@@ -1,6 +1,8 @@
-// Only these two desktop display records may cross the tool-output boundary.
+import {generatedHistorySql} from './generated-images.mjs';
+// Only validated desktop display records may cross the tool-output boundary.
 export const specialHistorySql = `(
   item_type IN ('userMessage','agentMessage','steeringUserMessage')
+  OR ${generatedHistorySql}
   OR (item_type='functionCallOutput' AND json_valid(item_json)
     AND json_extract(item_json,'$.name')='send_message_to_thread'
     AND json_extract(item_json,'$.namespace')='codex_app')

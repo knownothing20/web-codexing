@@ -18,9 +18,10 @@ const specialMode=process.argv.includes('--special');
 const statusMode=process.argv.includes('--status')||noticeMode||recentMode||specialMode,otherId=randomUUID(),unloadedId=randomUUID();let missingLoaded=false;
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
 const mediaDetailsMode=process.argv.includes('--media-details');
+const generatedMode=process.argv.includes('--generated');
 const mediaMode=process.argv.includes('--media')||mediaDetailsMode;
 const actionsMode=process.argv.includes('--actions');
-const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode||specialMode;
+const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode||specialMode||generatedMode;
 let ownerReads=0,fullFollows=0;const checkedIds=new Set();
 const metrics=()=>{if(manyMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows}));};
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
@@ -83,6 +84,24 @@ if(mediaMode){
   if(mediaDetailsMode)state.turns[0].items[1].text=`这次图片放在对应的折叠预览里，点击下面的按钮查看。\n\n<details>\n<summary>手机预览图</summary>\n\n![山景](${photos[0]})\n![日落](${photos[1]})\n[演示视频](${clip})\n\n</details>\n\n这里是预览块之后的说明。`;
   const d=new DatabaseSync(join(fixture,'state_5.sqlite'));d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);d.close();
   const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,'turn',2,'media-answer','agentMessage',JSON.stringify(state.turns[0].items[1]),Date.now());h.close();
+}
+if(generatedMode){
+  const {default:sharp}=await import('sharp');
+  state.title='生成图片 · 手机预览';state.requests=[];state.threadRuntimeStatus={type:'idle'};state.turns[0].status='completed';
+  state.turns[0].items=[{id:'generated-user',type:'userMessage',content:[{type:'text',text:'这四张生成图，手机上能直接看吗？'}]}];
+  const colors=['#294a46','#b38356','#809a86','#a9b69d'];
+  for(let i=0;i<4;i++){
+    const savedPath=join(fixture,`generated-${i+1}.png`);
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><rect width="960" height="540" fill="${colors[i]}"/><circle cx="735" cy="115" r="55" fill="#f8d78c"/><path d="M0 470L270 150L530 435L740 250L960 490V540H0Z" fill="#183f37"/><path d="M0 500L360 355L650 495L960 390V540H0Z" fill="#48705d"/><text x="50" y="80" font-family="sans-serif" font-size="35" fill="white">SCENE 0${i+1}</text></svg>`;
+    await sharp(Buffer.from(svg)).png().toFile(savedPath);
+    state.turns[0].items.push({id:`native-image-${i}`,type:'imageGeneration',status:'completed',savedPath,revisedPrompt:'PRIVATE_FIXTURE_PROMPT',result:'PRIVATE_FIXTURE_RESULT',failure:null});
+  }
+  state.turns[0].items.push({id:'generated-answer',type:'agentMessage',phase:'final_answer',text:'四张图片已生成。下面按顺序预览，点开可以放大、切换和保存原图。'});
+  const d=new DatabaseSync(join(fixture,'state_5.sqlite'));d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);d.close();
+  const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));
+  h.prepare('DELETE FROM thread_items WHERE thread_id=?').run(id);
+  for(const [i,item] of state.turns[0].items.entries())h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,'turn',i+1,item.id,item.type,JSON.stringify(item),Date.now());
+  h.close();
 }
 if(statusMode){state.threadRuntimeStatus={type:'idle'};state.turns[0].status='interrupted';}
 if(noticeMode){

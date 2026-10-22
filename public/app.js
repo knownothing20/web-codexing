@@ -331,8 +331,8 @@ function imageGallery(body, message, visibleIds=null) {
   const gallery = document.createElement('div'); gallery.className = 'image-gallery';
   for (const [index,picture] of items.entries()) {
     if(visibleIds&&!visibleIds.has(picture.id))continue;
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'image-thumb'+(picture.kind==='video'?' video-thumb':''); button.setAttribute('aria-label', (picture.kind==='video'?'播放视频：':'放大图片：') + picture.name);
-    const caption = document.createElement('span'); caption.textContent = '点击放大';
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'image-thumb'+(picture.generated?' generated-thumb':'')+(picture.kind==='video'?' video-thumb':''); button.setAttribute('aria-label', (picture.kind==='video'?'播放视频：':'放大图片：') + picture.name);
+    const caption = document.createElement('span'); caption.textContent = picture.generated?picture.name+' · 点击放大':'点击放大';
     if(picture.kind==='image') {
       const img=document.createElement('img');img.src=picture.thumbnailUrl||picture.url;img.alt=picture.name;img.loading='lazy';img.decoding='async';
       img.onerror=()=>{img.hidden=true;caption.textContent='缩略图不可用 · 点击查看原图';};button.append(img);
@@ -515,6 +515,10 @@ function renderMessage(message) {
         body.append(details);
       } else { const full = document.createElement('div'); full.className = 'forward-text'; full.textContent = text; body.append(full); }
     } else body.append(document.createTextNode(text));
+  } else if (message.kind === 'generatedImages') {
+    body.classList.add('generated-card');
+    const title=document.createElement('p');title.textContent=message.text;body.append(title);
+    imageGallery(body,message);
   } else if (message.kind === 'automation' && message.automation) {
     const task = message.automation; body.classList.add('automation-card');
     const heading = document.createElement('div'); heading.className = 'automation-heading';
@@ -558,7 +562,7 @@ function renderMessage(message) {
       const copy=document.createElement('button');copy.type='button';copy.className='copy-message';copy.textContent='⧉ 复制';copy.setAttribute('aria-label','复制这条消息');
       copy.onclick=()=>copyText(message.text).then(()=>toast('已复制消息')).catch(err=>toast(err.message));actions.append(copy);
     }
-    if (message.role === 'assistant') {
+    if (message.role === 'assistant' && message.kind !== 'generatedImages') {
       const actions = document.createElement('div'); actions.className = 'message-actions';
       const copy = document.createElement('button'); copy.type='button';copy.textContent = '⧉ 复制'; copy.setAttribute('aria-label', '复制这条回复');
       copy.onclick = async () => { try { await copyText(message.text); toast('已复制回复'); } catch (err) { toast(err.message); } };

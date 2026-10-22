@@ -59,7 +59,7 @@ export class ImageStore {
       if (this.entries.size > 768) this.entries.delete(this.entries.keys().next().value);
       const url='/api/'+(kind==='image'?'images/':'videos/')+id;
       const fileName=source.path?basename(source.path):'image.'+(source.data?.startsWith('data:image/jpeg')?'jpg':source.data?.match(/^data:image\/(\w+)/)?.[1]||'png');
-      return { id, name: source.name, fileName, url, ...(kind==='image'?{thumbnailUrl:url+'?size=thumb'}:{}) };
+      return { id, name: source.name, fileName, url, ...(source.generated?{generated:true}:{}), ...(kind==='image'?{thumbnailUrl:url+'?size=thumb'}:{}) };
     };
     const images=sources.map(source=>register(source,'image')),videos=clips.map(source=>register(source,'video'));
     // Preserve placement (including collapsed previews) without sending filesystem paths.

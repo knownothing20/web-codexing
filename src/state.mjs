@@ -1,6 +1,7 @@
 import { imageSources, videoSources } from './attachments.mjs';
 import { specialMessageFromItem } from './special-items.mjs';
 import { referencedUserText } from './references.mjs';
+import {generatedImageMessage,groupGeneratedImages} from './generated-images.mjs';
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 
 export function applyPatches(state, patches) {
@@ -72,6 +73,8 @@ export function messageFromItem(item, turnId = '', index = 0) {
   const id = item.id || `${turnId}:${index}`;
   const special = specialMessageFromItem(item, id, turnId);
   if (special) return special;
+  const generated=generatedImageMessage(item,id,turnId);
+  if(generated)return generated;
   if (['userMessage', 'steeringUserMessage'].includes(item.type)) {
     const raw = contentText(item.content || item.input);
     const referenced = referencedUserText(raw), references = referenced.references;
@@ -93,7 +96,7 @@ export function messageFromItem(item, turnId = '', index = 0) {
 }
 
 export function messagesFromTurns(turns) {
-  const messages = turns.flatMap(turn => {
+  const messages = groupGeneratedImages(turns.flatMap(turn => {
     const items = turn.items || [];
     const lastAgent = items.findLast(i=>i.type === 'agentMessage');
     const messages = items.map((item, i) => {
@@ -105,7 +108,7 @@ export function messagesFromTurns(turns) {
       if (text) messages.unshift({ id: `input:${turn.turnId}`, turnId: turn.turnId, role: 'user', kind: 'message', text, at: turn.turnStartedAtMs || null, timeSource: 'turn' });
     }
     return messages;
-  }).filter(m => m.text || m.imageSources?.length || m.videoSources?.length);
+  }).filter(m => m.text || m.imageSources?.length || m.videoSources?.length));
   let question;
   for (const m of messages) {
     if (m.kind === 'question') { question = m; m.questionAnswered = false; }

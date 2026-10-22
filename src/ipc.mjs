@@ -24,20 +24,37 @@ export function frame(message) {
 }
 
 export class FrameReader {
-  constructor(onMessage, maxBytes = 64 * 1024 * 1024) {
+  constructor(onMessage, maxBytes = 128 * 1024 * 1024) {
     this.onMessage = onMessage;
     this.maxBytes = maxBytes;
-    this.buffer = Buffer.alloc(0);
+    this.header = Buffer.alloc(4);
+    this.headerBytes = 0;
+    this.body = null;
+    this.bodyBytes = 0;
   }
   push(chunk) {
-    this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk;
-    while (this.buffer.length >= 4) {
-      const size = this.buffer.readUInt32LE(0);
-      if (!size || size > this.maxBytes) throw new Error('IPC 帧超出限制');
-      if (this.buffer.length < size + 4) return;
-      const body = this.buffer.subarray(4, 4 + size);
-      this.buffer = this.buffer.subarray(4 + size);
-      this.onMessage(JSON.parse(body.toString('utf8')));
+    let offset = 0;
+    while (offset < chunk.length) {
+      if (!this.body) {
+        const count = Math.min(4 - this.headerBytes, chunk.length - offset);
+        chunk.copy(this.header, this.headerBytes, offset, offset + count);
+        this.headerBytes += count; offset += count;
+        if (this.headerBytes < 4) return;
+        const size = this.header.readUInt32LE(0);
+        if (!size || size > this.maxBytes) throw new Error('IPC 帧超出限制');
+        // Image-heavy desktop snapshots can exceed 64 MiB. Allocate once:
+        // repeatedly concatenating network chunks copies the whole prefix and
+        // makes receiving a large snapshot quadratic in time and memory traffic.
+        this.body = Buffer.allocUnsafe(size);
+      }
+      const count = Math.min(this.body.length - this.bodyBytes, chunk.length - offset);
+      chunk.copy(this.body, this.bodyBytes, offset, offset + count);
+      this.bodyBytes += count; offset += count;
+      if (this.bodyBytes === this.body.length) {
+        const body = this.body;
+        this.body = null; this.bodyBytes = 0; this.headerBytes = 0;
+        this.onMessage(JSON.parse(body.toString('utf8')));
+      }
     }
   }
 }

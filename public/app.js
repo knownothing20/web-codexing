@@ -2,12 +2,16 @@ import { createReadTracker } from './read-state.js?v=32';
 import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=32';
 import {createNotifications,pendingKey} from './notifications.js?v=32';
 import {copyText} from './clipboard.js?v=33';
+import {inlineParts} from './inline-format.js?v=38';
+import {createOutbox} from './outbox.js?v=40';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
 let historyCursor = null, threadNext = null, listQuery = '', listGeneration = 0, openGeneration = 0;
 const drafts = new Map(), messageMap = new Map(), messageNodes = new Map();
 const attachmentDrafts=new Map(), forkRequests=new Map(); let branchSelection=null;
+const outbox=createOutbox({newId:()=>uuid()}),liveViews=new Map();
+let outboxSignature='';
 function currentAttachments(){return attachmentDrafts.get(currentId)||[];}
 function renderAttachments(){
   const files=currentAttachments(), root=$('draft-attachments');root.replaceChildren();root.hidden=!files.length;
@@ -150,6 +154,7 @@ function post(path, data) { return api(path, { method: 'POST', body: JSON.string
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 5500); }
 function banner(text) { $('banner').textContent = text || ''; $('banner').hidden = !text; }
 function showPair() {
+  outbox.disarmAll();
   for(const files of attachmentDrafts.values())for(const file of files){file.removed=true;if(file.preview)URL.revokeObjectURL(file.preview);}
   attachmentDrafts.clear();$('draft-attachments').replaceChildren();$('draft-attachments').hidden=true;
   disconnect(); $('pair-view').hidden = false; $('workspace').hidden = true;
@@ -281,6 +286,65 @@ function setConnection(text, connected, desktopConnected = connected) {
   $('device-status').textContent = providerNames[activeProvider] + (desktopConnected ? ' 已连接' : ' 暂未连接');
   $('device-dot').className = 'dot' + (desktopConnected ? '' : ' warn');
 }
+function renderOutbox() {
+  const entries=activeProvider==='codex'?outbox.list(currentId):[],root=$('pending-messages');
+  const signature=JSON.stringify([currentId,busy,writable,sending,uncertain,entries.map(e=>[e.id,e.state,e.error])]);
+  if(signature===outboxSignature)return;outboxSignature=signature;
+  root.hidden=!entries.length;root.replaceChildren();if(!entries.length)return;
+  const heading=document.createElement('div');heading.className='pending-heading';
+  const title=document.createElement('strong');title.textContent=`待发送 ${entries.length}`;
+  const note=document.createElement('span');note.textContent='仅当前页面保留';heading.append(title,note);root.append(heading);
+  const list=document.createElement('div');list.className='pending-list';root.append(list);
+  for(const entry of entries){
+    const card=document.createElement('article');card.className='pending-card';card.dataset.queueId=entry.id;
+    const state=document.createElement('small');state.textContent=({held:'已暂存 · 尚未发送',armed:'等待本轮完成后发送',sending:'正在发送…',unknown:'发送结果待核对，勿重复发送'})[entry.state];
+    const text=document.createElement('p');text.textContent=entry.payload.text||'附件消息';
+    const meta=document.createElement('span');meta.className='pending-meta';meta.textContent=[entry.payload.files.length?entry.payload.files.length+' 个附件':'',entry.payload.skills.length?entry.payload.skills.length+' 个 Skill':'',entry.payload.references.length?entry.payload.references.length+' 个会话引用':'',entry.error].filter(Boolean).join(' · ');
+    card.append(state,text);if(meta.textContent)card.append(meta);
+    const actions=document.createElement('div');actions.className='pending-actions';card.append(actions);
+    const add=(label,action,disabled=false)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.disabled=disabled;button.onclick=action;actions.append(button);};
+    const locked=['sending','unknown'].includes(entry.state);
+    add(busy?'立即引导':'立即发送',()=>dispatchQueued(entry.id),locked||!writable||sending||uncertain);
+    if(entry.state==='armed')add('改为暂存',()=>{outbox.pause(entry.id);renderOutbox();},false);
+    else if(busy)add('完成后发送',()=>{if(!outbox.arm(entry.id,liveViews.get(currentId)))toast('当前轮已变化，请手动发送');renderOutbox();},locked||!writable||sending||uncertain);
+    add('编辑',()=>editQueued(entry.id),locked||sending);
+    add('移除',()=>{const removed=outbox.remove(entry.id);if(!removed)return;for(const file of removed.payload.files){if(file.preview)URL.revokeObjectURL(file.preview);if(removed.state!=='unknown'&&file.id)api('/api/uploads/'+file.id,{method:'DELETE'}).catch(()=>{});}updateComposer();},entry.state==='sending');
+    list.append(card);
+  }
+}
+function editQueued(id){
+  const entry=outbox.get(id);if(!entry||['sending','unknown'].includes(entry.state))return;
+  if($('draft').value.trim()||currentAttachments().length||selectedSkills.length||selectedThreads.length){toast('先处理当前草稿，再编辑暂存消息');return;}
+  outbox.remove(id);attachmentDrafts.set(currentId,entry.payload.files);selectedSkills=entry.payload.skills;selectedThreads=entry.payload.references;
+  $('draft').value=entry.payload.text;renderContext();renderAttachments();$('draft').oninput();$('draft').focus();updateComposer();
+}
+function stageDraft(after=false){
+  if($('send').disabled||activeProvider!=='codex')return;
+  try{
+    const entry=outbox.hold(currentId,{text:$('draft').value.trim(),files:currentAttachments().slice(),skills:selectedSkills.slice(),references:selectedThreads.slice()});
+    const armed=after&&outbox.arm(entry.id,liveViews.get(currentId));
+    attachmentDrafts.set(currentId,[]);drafts.delete(currentId);contexts.delete(currentId);selectedSkills=[];selectedThreads=[];
+    $('draft').value='';$('draft').style.height='auto';$('send-menu').open=false;renderContext();renderAttachments();updateComposer();
+    toast(armed?'已安排本轮完成后发送':after?'本轮已变化，消息先暂存':'已暂存，尚未发送给 Codex');
+  }catch(err){toast(err.message);}
+}
+async function dispatchQueued(id,{reserved=false}={}){
+  const entry=outbox.get(id);if(!entry)return;
+  if(entry.threadId!==currentId||activeProvider!=='codex'||document.hidden||!writable||sending||uncertain){if(reserved)outbox.fail(id,'等待手动发送');return;}
+  if(reserved&&busy){outbox.fail(id,'会话已开始新的任务，请手动发送');return;}
+  if(!reserved&&!outbox.reserve(id))return;
+  const generation=openGeneration,mode=busy?'steer':'message';sending=true;updateComposer();
+  try{
+    const {text,files,skills,references}=entry.payload;
+    await post(`/api/threads/${entry.threadId}/send`,{text,messageId:entry.requestId,uploadIds:files.map(f=>f.id),mode,skillIds:skills.map(s=>s.id),referenceIds:references.map(r=>r.id)});
+    outbox.done(id);for(const file of files)if(file.preview)URL.revokeObjectURL(file.preview);
+    toast(mode==='steer'?'引导已交给 Codex':'暂存消息已发送');
+  }catch(err){
+    const unknown=!!err.unknown||err instanceof TypeError;outbox.fail(id,err.message,unknown);
+    if(unknown&&generation===openGeneration){uncertain=true;banner('暂存消息发送结果待确认，请先核对电脑是否收到，避免重复发送。');}
+    toast(err.message);
+  }finally{if(generation===openGeneration){sending=false;updateComposer();}}
+}
 function updateComposer() {
   $('draft').disabled = !currentId;
   const files=currentAttachments();
@@ -288,12 +352,13 @@ function updateComposer() {
   $('attach-image').disabled=$('attach-file').disabled=!currentId||sending||uncertain||activeProvider!=='codex';
   for(const button of $('draft-attachments').querySelectorAll('button'))button.disabled=sending||uncertain;
   const steering = busy && activeProvider === 'codex';
-  $('send').textContent = steering ? '引导' : '↑'; $('send').classList.toggle('steer',steering);
-  $('send').setAttribute('aria-label',steering ? '发送引导消息' : '发送消息');
-  $('send').title = steering ? '把这句话追加到当前任务，不停止执行' : '发送消息';
+  $('send').textContent = steering ? '暂存' : '↑'; $('send').classList.toggle('steer',steering);
+  $('send').setAttribute('aria-label',steering ? '暂存消息' : '发送消息');
+  $('send').title = steering ? '先暂存，不触发当前任务；稍后手动选择发送方式' : '发送消息';
+  $('send-menu').hidden=!steering;for(const id of ['send-held','send-now','send-after'])$(id).disabled=$('send').disabled;
   const currentRequests=requestsNow.filter(r=>!r.historical);
   $('stop').hidden = !writable || !busy; $('activity').hidden = !busy || currentRequests.length>0;
-  $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : writable&&currentRequests.length ? '待操作 · 请处理会话里的问题或审批' : busy ? '正在执行 · 可随时补充一句引导' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
+  $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : writable&&currentRequests.length ? '待操作 · 请处理会话里的问题或审批' : busy ? '执行中 · 点发送先暂存，不触发任务' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
   $('char-count').textContent = $('draft').value.length > 5000 ? `${$('draft').value.length}/8000` : '';
   $('model-settings').disabled = !writable || activeProvider !== 'codex';
   $('pick-thread').disabled = !currentId || sending || activeProvider !== 'codex';
@@ -302,6 +367,7 @@ function updateComposer() {
   $('model-settings').title = activeProvider === 'codex' ? '选择模型、思考档位与加速' : '模型设置请在电脑端处理';
   $('draft').placeholder = `发消息给电脑上的 ${providerNames[activeProvider]}…`;
   if (activeProvider !== 'codex') $('draft-note').textContent = uncertain ? '结果待确认，请核对电脑，避免重复发送' : writable ? activeProvider === 'claude' ? '通过本机通道发送 · 审批仍在电脑处理' : '发送到 WorkBuddy 本地助理' : '查看历史 · 等待电脑连接';
+  renderOutbox();
 }
 function offline(text, connected = false, reason = '') {
   if (!text) clearTimeout(desktopOpenTimer);
@@ -381,22 +447,34 @@ function uuid() {
   return `${s.slice(0,8)}-${s.slice(8,12)}-${s.slice(12,16)}-${s.slice(16,20)}-${s.slice(20)}`;
 }
 
+function fileReference(file) {
+  const details=document.createElement('details');details.className='file-reference';
+  const summary=document.createElement('summary'),badge=document.createElement('span'),title=document.createElement('span');
+  badge.className='file-type';badge.textContent=file.extension;
+  title.className='file-title';const label=document.createElement('strong'),name=document.createElement('small');
+  label.textContent=file.text;name.textContent=(file.name===file.text?'':file.name+' · ')+'查看路径';title.append(label,name);
+  summary.append(badge,title);details.append(summary);
+  const body=document.createElement('div');body.className='file-path';const path=document.createElement('code');path.textContent=file.path;
+  const footer=document.createElement('div'),note=document.createElement('span'),copy=document.createElement('button');
+  note.textContent='在对应电脑上打开';copy.type='button';copy.textContent='复制路径';copy.setAttribute('aria-label','复制路径：'+file.text);
+  copy.onclick=async()=>{try{await copyText(file.path);toast('已复制文件路径');}catch(err){toast(err.message);}};
+  footer.append(note,copy);body.append(path,footer);details.append(body);details.addEventListener('toggle',updateJump);return details;
+}
 function inline(parent, text) {
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^\s)]+\))/g;
-  let at = 0;
-  for (const match of text.matchAll(pattern)) {
-    parent.append(document.createTextNode(text.slice(at, match.index)));
-    const token = match[0]; let node;
-    if (token.startsWith('`')) { node = document.createElement('code'); node.textContent = token.slice(1, -1); }
-    else if (token.startsWith('**')) { node = document.createElement('strong'); node.textContent = token.slice(2, -2); }
-    else {
-      const parts = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(token);
-      if (/^https?:\/\//i.test(parts[2])) { node = document.createElement('a'); node.href = parts[2]; node.target = '_blank'; node.rel = 'noopener noreferrer'; node.textContent = parts[1]; }
-      else { node = document.createElement('span'); node.textContent = parts[1]; }
+  const parts=inlineParts(text);
+  if(parts.length===1&&parts[0].type==='file'&&parent.tagName==='LI'){parent.append(fileReference(parts[0]));return;}
+  for(const part of parts){
+    if(part.type==='text'){parent.append(document.createTextNode(part.text));continue;}
+    let node;
+    if(part.type==='file'){
+      node=document.createElement('button');node.type='button';node.className='file-inline';node.textContent='▤ '+part.text;node.title='复制文件路径';
+      node.onclick=async()=>{try{await copyText(part.path);toast('已复制文件路径');}catch(err){toast(err.message);}};
+    } else {
+      node=document.createElement(({code:'code',strong:'strong',link:'a'})[part.type]);node.textContent=part.text;
+      if(part.type==='link'){node.href=part.url;node.target='_blank';node.rel='noopener noreferrer';}
     }
-    parent.append(node); at = match.index + token.length;
+    parent.append(node);
   }
-  parent.append(document.createTextNode(text.slice(at)));
 }
 function markdown(text, message=null, depth=0) {
   const frag = document.createDocumentFragment(), lines = text.split('\n');
@@ -404,7 +482,7 @@ function markdown(text, message=null, depth=0) {
   let paragraph = [], list = null;
   const flush = () => { if (paragraph.length) { const p = document.createElement('p'); inline(p, paragraph.join('\n')); frag.append(p); paragraph = []; } list = null; };
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    let line = lines[i];
     if (/^\s*```/.test(line)) {
       flush(); const language = line.trim().slice(3); const code = [];
       while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
@@ -451,6 +529,9 @@ function markdown(text, message=null, depth=0) {
       while (i+1 < lines.length && /^\s*\|/.test(lines[i+1])) row(lines[++i], 'td');
       wrap.append(table); frag.append(wrap); continue;
     }
+    if(/\[[^\]\n]+\][ \t]*$/.test(line)&&/^\s*\((?:<[^<>\r\n]+>|[^\s)]+)\)\s*$/.test(lines[i+1]||''))line+=lines[++i].trim();
+    const file=inlineParts(line.trim());
+    if(file.length===1&&file[0].type==='file'){flush();frag.append(fileReference(file[0]));continue;}
     const heading = /^(#{1,3})\s+(.+)$/.exec(line);
     if (heading) { flush(); const h = document.createElement(`h${heading[1].length}`); inline(h, heading[2]); frag.append(h); continue; }
     const bullet = /^\s*(?:([-*])|\d+[.)])\s+(.+)$/.exec(line);
@@ -877,15 +958,15 @@ function disconnect() { source?.close(); source = null; }
 function connectEvents(id, generation) {
   disconnect();
   if (document.hidden || !csrf) return;
-  source = new EventSource(threadPath(id, 'events'));
+  const eventSource = source = new EventSource(threadPath(id, 'events'));
   source.onopen = () => {
-    if (generation !== openGeneration) return;
+    if (generation !== openGeneration || source !== eventSource || document.hidden) return;
     api(threadPath(id, 'history')).then(page => {
       if (generation === openGeneration) mergeMessages(page.messages.filter(m => !recentTurnIds.has(m.turnId)), { prepend: true });
     }).catch(() => {});
   };
   source.onmessage = event => {
-    if (generation !== openGeneration) return;
+    if (generation !== openGeneration || source !== eventSource || document.hidden) return;
     const data = JSON.parse(event.data);
     if(data.type==='activity') {
       for(const row of data.threads || []) {
@@ -946,6 +1027,10 @@ function connectEvents(id, generation) {
       threadTitles.set(id,data.title || $('thread-title').textContent);
       const currentRequests=(data.requests || []).filter(r=>!r.historical);
       paintThreadStatus(id,status,displayedCompletionKey,data.completedAt,'ready',pendingKey(currentRequests.map(r=>r.id)),currentRequests.length>0);
+      const view={writable:!!data.writable,busy:!!data.busy,turnId:data.turnId,completionKey:data.completionKey,status,pendingCount:currentRequests.length};
+      liveViews.set(id,view);if(liveViews.size>100)liveViews.delete(liveViews.keys().next().value);
+      if(activeProvider==='codex'&&!document.hidden){const queued=outbox.observe(id,view);if(queued)queueMicrotask(()=>dispatchQueued(queued.id,{reserved:true}));}
+      renderOutbox();
       if (followBottom) $('message-scroll').scrollTop = $('message-scroll').scrollHeight;
       else if (data.type === 'update' && data.messages?.length) hasUnread = true;
       requestAnimationFrame(markCurrentCompletionRead);
@@ -955,7 +1040,7 @@ function connectEvents(id, generation) {
     if (data.type === 'error') toast(data.message);
   };
   source.onerror = () => {
-    if (generation !== openGeneration) return;
+    if (generation !== openGeneration || source !== eventSource || document.hidden) return;
     writable = false; offline('网页与电脑的连接中断，正在恢复。历史和草稿仍可查看。'); setConnection('连接中断，正在恢复…', false); renderRequests(requestsNow); updateComposer();
     api('/api/status').then(status=>{csrf=status.csrf;}).catch(() => {});
   };
@@ -969,7 +1054,7 @@ async function openThread(id, title) {
   expandedHistorical.clear();
   expandFromId = loadExpansion(id); olderOutsideRange = new Set(); manualProgress.clear();
   selectedSkills = contexts.get(id)?.skills || []; selectedThreads = contexts.get(id)?.threads || []; renderContext();
-  requestSignature = ''; requestsNow = []; $('picker-overlay').hidden = true; $('settings-overlay').hidden = true; closeImage();
+  requestSignature = ''; requestsNow = []; $('picker-overlay').hidden = true; $('settings-overlay').hidden = true; $('send-menu').open=false; closeImage();
   writable = false; busy = false; uncertain = false; sending = false; historyCursor = null;
   currentServiceTier=null;currentServiceTierKnown=false;
   messageMap.clear(); messageNodes.clear(); messageOrder = []; recentIds = new Set(); recentTurnIds = new Set(); $('messages').replaceChildren(); $('requests').replaceChildren();
@@ -1091,13 +1176,17 @@ $('confirm-branch').onclick=async()=>{
     toast('分支已创建，原会话和草稿已保留');
   }catch(err){$('branch-error').textContent=err.message;if(!err.unknown){forkRequests.delete(key);try{sessionStorage.removeItem('rc_fork_'+key);}catch{}$('confirm-branch').disabled=false;}}
 };
-$('send').onclick = async () => {
+$('send').onclick = () => {if(busy&&activeProvider==='codex')stageDraft();else sendDraft('message');};
+$('send-held').onclick=()=>stageDraft();
+$('send-after').onclick=()=>stageDraft(true);
+$('send-now').onclick=()=>{$('send-menu').open=false;if(busy)sendDraft('steer');else toast('本轮已结束，请使用普通发送');};
+async function sendDraft(mode) {
   if ($('send').disabled) return;
   const text = $('draft').value.trim(), id = currentId, generation = openGeneration, messageId = uuid();
   sending = true; updateComposer();
   try {
     const files=currentAttachments().slice();
-    const result = await post(threadPath(id, 'send'), { text, messageId, uploadIds:files.map(f=>f.id), mode:busy && activeProvider === 'codex' ? 'steer' : 'message', skillIds: selectedSkills.map(s => s.id), referenceIds: selectedThreads.map(t => t.id) });
+    const result = await post(threadPath(id, 'send'), { text, messageId, uploadIds:files.map(f=>f.id), mode, skillIds: selectedSkills.map(s => s.id), referenceIds: selectedThreads.map(t => t.id) });
     const remaining=(attachmentDrafts.get(id)||[]).filter(f=>!files.includes(f));attachmentDrafts.set(id,remaining);for(const file of files)if(file.preview)URL.revokeObjectURL(file.preview);
     drafts.delete(id);
     contexts.delete(id);
@@ -1106,7 +1195,7 @@ $('send').onclick = async () => {
     if (generation === openGeneration && (err.unknown || err instanceof TypeError)) { uncertain = true; banner('发送结果暂时无法确认。请先核对桌面是否收到，避免重复发送。'); }
     toast(err.message);
   } finally { if (generation === openGeneration) { sending = false; updateComposer(); } }
-};
+}
 $('stop').onclick = async () => {
   $('stop').disabled = true;
   try { await post(`/api/threads/${currentId}/stop`, {}); toast('已提交停止请求'); }
@@ -1207,7 +1296,7 @@ $('save-settings').onclick = async () => {
   } catch (err) { $('settings-error').textContent = err.message; $('save-settings').disabled = speedConflict; }
   finally{settingsSaving=false;}
 };
-$('logout').onclick = async () => { try { await post('/api/logout', {}); sessionStorage.clear(); showPair(); } catch (err) { toast(err.message); } };
+$('logout').onclick = async () => { try { await post('/api/logout', {});for(const entry of outbox.clear())for(const file of entry.payload.files)if(file.preview)URL.revokeObjectURL(file.preview);sessionStorage.clear(); showPair(); } catch (err) { toast(err.message); } };
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { if(!$('image-overlay').hidden)closeImage();disconnect(); collapseNotice(); writable = false; updateComposer(); }
   else if (csrf) { if (currentId) connectEvents(currentId, openGeneration); loadThreads(); loadQuota(); }

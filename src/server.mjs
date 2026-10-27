@@ -50,6 +50,8 @@ const protocol = tls ? 'https' : 'http';
 let port;
 let urls;
 const staticFiles = new Map([
+  ['/inline-format.js', ['inline-format.js', 'text/javascript; charset=utf-8']],
+  ['/outbox.js', ['outbox.js', 'text/javascript; charset=utf-8']],
   ['/clipboard.js', ['clipboard.js', 'text/javascript; charset=utf-8']],
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],

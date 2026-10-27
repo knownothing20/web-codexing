@@ -33,7 +33,7 @@ export function createDemoServer() {
   const server = http.createServer(async (req,res) => {
     const url = new URL(req.url,'http://127.0.0.1');
     const json = value => {res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
-    const assets = {'/':'index.html','/app.js':'app.js','/read-state.js':'read-state.js','/service-tier.js':'service-tier.js','/notifications.js':'notifications.js','/style.css':'style.css','/icon.svg':'icon.svg','/manifest.webmanifest':'manifest.webmanifest'};
+    const assets = {'/':'index.html','/app.js':'app.js','/clipboard.js':'clipboard.js','/inline-format.js':'inline-format.js','/outbox.js':'outbox.js','/read-state.js':'read-state.js','/service-tier.js':'service-tier.js','/notifications.js':'notifications.js','/style.css':'style.css','/icon.svg':'icon.svg','/manifest.webmanifest':'manifest.webmanifest'};
     if (req.method === 'GET' && assets[url.pathname]) {
       let content = readFileSync(join(root,'public',assets[url.pathname]));
       if(url.pathname==='/') content=Buffer.from(content.toString().replaceAll('Remote Coding','Web Codexing').replace('你的 Codex，随身连接','公开演示 · 不连接真实账号').replace('局域网直连','演示模式 · 无真实任务'));

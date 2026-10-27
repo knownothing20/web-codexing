@@ -19,11 +19,12 @@ const statusMode=process.argv.includes('--status')||noticeMode||recentMode||spec
 const manyMode=process.argv.includes('--many'),manyIds=new Set();
 const mediaDetailsMode=process.argv.includes('--media-details');
 const generatedMode=process.argv.includes('--generated');
+const fileLinksMode=process.argv.includes('--file-links');
 const mediaMode=process.argv.includes('--media')||mediaDetailsMode;
 const actionsMode=process.argv.includes('--actions');
-const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode||specialMode||generatedMode;
-let ownerReads=0,fullFollows=0;const checkedIds=new Set();
-const metrics=()=>{if(manyMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows}));};
+const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode||specialMode||generatedMode||fileLinksMode;
+let ownerReads=0,fullFollows=0,starts=0,steers=0,stops=0;const checkedIds=new Set();
+const metrics=()=>{if(manyMode||fileLinksMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows,starts,steers,stops}));};
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
 db.exec('CREATE TABLE threads (id TEXT PRIMARY KEY,name TEXT,title TEXT,cwd TEXT,updated_at INTEGER,model TEXT,archived INTEGER,agent_path TEXT,source TEXT,rollout_path TEXT)');
 db.prepare('INSERT INTO threads VALUES(?,?,?,?,?,?,?,?,?,?)').run(id, '手机问答验收 · 隔离测试', '手机问答验收 · 隔离测试', resolve('.'), Math.floor(Date.now()/1000), 'test', 0, null, 'vscode', '');
@@ -103,6 +104,12 @@ if(generatedMode){
   for(const [i,item] of state.turns[0].items.entries())h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,'turn',i+1,item.id,item.type,JSON.stringify(item),Date.now());
   h.close();
 }
+if(fileLinksMode){
+  state.title='文件与输入框 · 手机预览';state.threadRuntimeStatus={type:'active'};state.turns[0].status='inProgress';
+  state.turns[0].items=[{id:'files-user',type:'userMessage',content:[{type:'text',text:'这几个文件，整理成方便手机阅读的样式。'}]},
+    {id:'files-answer',type:'agentMessage',phase:'final_answer',text:'已整理审核材料，原文件保留。\n\n[审核包（NAS，27.7 MB）](</srv/example/projects/demo/reviews/weekly-review/archive-v2.zip>)\n\n两份工作流都还在：\n\n- [快速版](</D:/Example Workflows/版本目录/中文 快速版.json>)\n- [质量版]\n(</D:/Example Workflows/版本目录/中文 (质量版).json>)\n\n文件路径默认收起，点开可以查看和复制。'}];
+  const d=new DatabaseSync(join(fixture,'state_5.sqlite'));d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);d.close();
+}
 if(statusMode){state.threadRuntimeStatus={type:'idle'};state.turns[0].status='interrupted';}
 if(noticeMode){
   state.title='正在编写的会话';state.requests=[];state.turns[0].status='inProgress';state.threadRuntimeStatus={type:'active'};
@@ -144,17 +151,22 @@ const fake = net.createServer(socket => {
         setTimeout(()=>{for(const s of sockets)broadcast(s,target.id);},80);
       }
       if(message.method==='thread-follower-steer-turn') {
+        steers++;metrics();
         writeFileSync(join(fixture,'steer-receipt.json'),JSON.stringify(message.params));
         state.turns[0].items.push({id:'steer',type:'steeringUserMessage',status:'accepted',input:message.params.input});
         result={result:{turnId:state.turns[0].turnId}};
         setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
       }
       if(message.method==='thread-follower-start-turn') {
+        starts++;metrics();
         if(message.params.turnStart.context.useUserMessageAdmission)throw new Error('Cloud admission must stay disabled');
         writeFileSync(join(fixture,'history-reply-receipt.json'),JSON.stringify(message.params));
-        state.turns.push({turnId:'history-reply',status:actionsMode?'completed':'inProgress',items:[{id:'history-answer',type:'userMessage',content:message.params.turnStart.request.input},...actionsMode?[{id:'upload-answer',type:'agentMessage',phase:'final_answer',text:'已收到图片和文件（隔离测试回执，没有运行真实任务）。'}]:[]]});
+        state.turns.push({turnId:fileLinksMode?'reply-'+randomUUID():'history-reply',status:actionsMode?'completed':'inProgress',items:[{id:'history-answer',type:'userMessage',content:message.params.turnStart.request.input},...actionsMode?[{id:'upload-answer',type:'agentMessage',phase:'final_answer',text:'已收到图片和文件（隔离测试回执，没有运行真实任务）。'}]:[]]});
         state.threadRuntimeStatus={type:actionsMode?'idle':'active'};
         setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
+      }
+      if(fileLinksMode&&message.method==='thread-follower-interrupt-turn'){
+        stops++;metrics();state.threadRuntimeStatus={type:'idle'};state.turns.at(-1).status='interrupted';setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
       }
       socket.write(frame({type:'response',requestId:message.requestId,method:message.method,handledByClientId:'fixture-owner',resultType:'success',result}));
     } else if(message.method==='thread-stream-following-changed' && message.params.following){fullFollows++;metrics();broadcast(socket,message.params.conversationId);}

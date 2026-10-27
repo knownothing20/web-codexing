@@ -10,7 +10,7 @@ test('held messages remain local across completion and reconnect until manually 
   assert.equal(q.observe('chat',completed),null);assert.equal(q.observe('chat',{...completed,writable:false}),null);
   assert.equal(q.list('chat')[0].state,'held');assert.equal(q.reserve(e.id),e);assert.equal(q.reserve(e.id),null);
 });
-test('only explicit after-completion choice sends once for the exact original turn',()=>{
+test('queued messages send once for the exact original completed turn',()=>{
   const q=box(),e=q.hold('chat',payload);assert.equal(q.arm(e.id,active),true);
   for(const view of [active,{...completed,pendingCount:1},{...completed,writable:false}])assert.equal(q.observe('chat',view),null);
   assert.equal(q.observe('other',completed),null);assert.equal(q.observe('chat',completed),e);
@@ -21,10 +21,21 @@ test('stopped, failed and superseded turns cancel automatic sending rather than 
     const q=box(),e=q.hold('chat',payload);q.arm(e.id,active);assert.equal(q.observe('chat',changed),null);assert.equal(e.state,'held');
   }
 });
-test('only one message can be armed per chat; edit/remove/pause do not send',()=>{
+test('multiple queued messages wait FIFO across their own next turns without repeated sends',()=>{
   const q=box(),a=q.hold('chat',payload),b=q.hold('chat',payload);q.arm(a.id,active);q.arm(b.id,active);
-  assert.equal(a.state,'held');assert.equal(b.state,'armed');q.pause(b.id);assert.equal(q.observe('chat',completed),null);
-  assert.equal(q.arm(b.id,completed),false);assert.equal(q.remove(a.id),a);assert.equal(q.get(a.id),undefined);
+  assert.equal(a.state,'armed');assert.equal(b.state,'armed');assert.equal(q.observe('chat',completed),a);
+  assert.equal(q.observe('chat',completed),null);q.done(a.id,{mode:'message',turnId:'two'});
+  assert.equal(q.observe('chat',completed),null);assert.equal(q.observe('chat',{...active,turnId:'two'}),null);
+  assert.equal(q.observe('chat',{...completed,completionKey:'two'}),b);assert.equal(q.observe('chat',{...completed,completionKey:'two'}),null);
+});
+test('steering a selected queue item immediately leaves other items waiting for the same turn',()=>{
+  const q=box(),a=q.hold('chat',payload),b=q.hold('chat',payload);q.arm(a.id,active);q.arm(b.id,active);
+  q.reserve(b.id);q.done(b.id,{mode:'steer'});assert.equal(q.observe('chat',active),null);assert.equal(q.observe('chat',completed),a);
+});
+test('missing next-turn receipt waits for a fresh active snapshot, not an old completion',()=>{
+  const q=box(),a=q.hold('chat',payload),b=q.hold('chat',payload);q.arm(a.id,active);q.arm(b.id,active);
+  q.observe('chat',completed);q.done(a.id,{mode:'message'});assert.equal(q.observe('chat',completed),null);
+  assert.equal(q.observe('chat',{...active,turnId:'two'}),null);assert.equal(q.observe('chat',{...completed,completionKey:'two'}),b);
 });
 test('unknown results cannot be retried, while known failures require a new manual action',()=>{
   const q=box(),e=q.hold('chat',payload),key=e.requestId;q.reserve(e.id);q.fail(e.id,'connection lost',true);

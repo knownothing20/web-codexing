@@ -153,15 +153,18 @@ const fake = net.createServer(socket => {
       if(message.method==='thread-follower-steer-turn') {
         steers++;metrics();
         writeFileSync(join(fixture,'steer-receipt.json'),JSON.stringify(message.params));
-        state.turns[0].items.push({id:'steer',type:'steeringUserMessage',status:'accepted',input:message.params.input});
-        result={result:{turnId:state.turns[0].turnId}};
+        const target=fileLinksMode?state.turns.at(-1):state.turns[0];
+        target.items.push({id:'steer',type:'steeringUserMessage',status:'accepted',input:message.params.input});
+        result={result:{turnId:target.turnId}};
         setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
       }
       if(message.method==='thread-follower-start-turn') {
         starts++;metrics();
         if(message.params.turnStart.context.useUserMessageAdmission)throw new Error('Cloud admission must stay disabled');
         writeFileSync(join(fixture,'history-reply-receipt.json'),JSON.stringify(message.params));
-        state.turns.push({turnId:fileLinksMode?'reply-'+randomUUID():'history-reply',status:actionsMode?'completed':'inProgress',items:[{id:'history-answer',type:'userMessage',content:message.params.turnStart.request.input},...actionsMode?[{id:'upload-answer',type:'agentMessage',phase:'final_answer',text:'已收到图片和文件（隔离测试回执，没有运行真实任务）。'}]:[]]});
+        const turnId=fileLinksMode?'reply-'+randomUUID():'history-reply';
+        state.turns.push({turnId,status:actionsMode?'completed':'inProgress',items:[{id:fileLinksMode?message.params.turnStart.request.clientUserMessageId:'history-answer',type:'userMessage',content:message.params.turnStart.request.input},...actionsMode?[{id:'upload-answer',type:'agentMessage',phase:'final_answer',text:'已收到图片和文件（隔离测试回执，没有运行真实任务）。'}]:[]]});
+        if(fileLinksMode)result={result:{turn:{id:turnId}}};
         state.threadRuntimeStatus={type:actionsMode?'idle':'active'};
         setTimeout(()=>{for(const s of sockets)broadcast(s);},80);
       }

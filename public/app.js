@@ -3,7 +3,7 @@ import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-ti
 import {createNotifications,pendingKey} from './notifications.js?v=32';
 import {copyText} from './clipboard.js?v=33';
 import {inlineParts} from './inline-format.js?v=38';
-import {createOutbox} from './outbox.js?v=40';
+import {createOutbox} from './outbox.js?v=44';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
@@ -293,22 +293,20 @@ function renderOutbox() {
   root.hidden=!entries.length;root.replaceChildren();if(!entries.length)return;
   const heading=document.createElement('div');heading.className='pending-heading';
   const title=document.createElement('strong');title.textContent=`待发送 ${entries.length}`;
-  const note=document.createElement('span');note.textContent='仅当前页面保留';heading.append(title,note);root.append(heading);
+  const note=document.createElement('span');note.textContent='完成后自动继续 · 仅当前页面';heading.append(title,note);root.append(heading);
   const list=document.createElement('div');list.className='pending-list';root.append(list);
   for(const entry of entries){
     const card=document.createElement('article');card.className='pending-card';card.dataset.queueId=entry.id;
-    const state=document.createElement('small');state.textContent=({held:'已暂存 · 尚未发送',armed:'等待本轮完成后发送',sending:'正在发送…',unknown:'发送结果待核对，勿重复发送'})[entry.state];
+    const state=document.createElement('small');state.hidden=entry.state==='armed';state.textContent=({held:'队列已暂停',armed:'等待本轮完成后发送',sending:'正在发送…',unknown:'发送结果待核对，勿重复发送'})[entry.state];
     const text=document.createElement('p');text.textContent=entry.payload.text||'附件消息';
     const meta=document.createElement('span');meta.className='pending-meta';meta.textContent=[entry.payload.files.length?entry.payload.files.length+' 个附件':'',entry.payload.skills.length?entry.payload.skills.length+' 个 Skill':'',entry.payload.references.length?entry.payload.references.length+' 个会话引用':'',entry.error].filter(Boolean).join(' · ');
     card.append(state,text);if(meta.textContent)card.append(meta);
     const actions=document.createElement('div');actions.className='pending-actions';card.append(actions);
     const add=(label,action,disabled=false)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.disabled=disabled;button.onclick=action;actions.append(button);};
     const locked=['sending','unknown'].includes(entry.state);
-    add(busy?'立即引导':'立即发送',()=>dispatchQueued(entry.id),locked||!writable||sending||uncertain);
-    if(entry.state==='armed')add('改为暂存',()=>{outbox.pause(entry.id);renderOutbox();},false);
-    else if(busy)add('完成后发送',()=>{if(!outbox.arm(entry.id,liveViews.get(currentId)))toast('当前轮已变化，请手动发送');renderOutbox();},locked||!writable||sending||uncertain);
+    add('引导',()=>dispatchQueued(entry.id),locked||!writable||sending||uncertain);
+    add('删除',()=>{const removed=outbox.remove(entry.id);if(!removed)return;for(const file of removed.payload.files){if(file.preview)URL.revokeObjectURL(file.preview);if(removed.state!=='unknown'&&file.id)api('/api/uploads/'+file.id,{method:'DELETE'}).catch(()=>{});}updateComposer();},entry.state==='sending');
     add('编辑',()=>editQueued(entry.id),locked||sending);
-    add('移除',()=>{const removed=outbox.remove(entry.id);if(!removed)return;for(const file of removed.payload.files){if(file.preview)URL.revokeObjectURL(file.preview);if(removed.state!=='unknown'&&file.id)api('/api/uploads/'+file.id,{method:'DELETE'}).catch(()=>{});}updateComposer();},entry.state==='sending');
     list.append(card);
   }
 }
@@ -318,14 +316,14 @@ function editQueued(id){
   outbox.remove(id);attachmentDrafts.set(currentId,entry.payload.files);selectedSkills=entry.payload.skills;selectedThreads=entry.payload.references;
   $('draft').value=entry.payload.text;renderContext();renderAttachments();$('draft').oninput();$('draft').focus();updateComposer();
 }
-function stageDraft(after=false){
+function stageDraft(){
   if($('send').disabled||activeProvider!=='codex')return;
   try{
     const entry=outbox.hold(currentId,{text:$('draft').value.trim(),files:currentAttachments().slice(),skills:selectedSkills.slice(),references:selectedThreads.slice()});
-    const armed=after&&outbox.arm(entry.id,liveViews.get(currentId));
+    const armed=outbox.arm(entry.id,liveViews.get(currentId));
     attachmentDrafts.set(currentId,[]);drafts.delete(currentId);contexts.delete(currentId);selectedSkills=[];selectedThreads=[];
-    $('draft').value='';$('draft').style.height='auto';$('send-menu').open=false;renderContext();renderAttachments();updateComposer();
-    toast(armed?'已安排本轮完成后发送':after?'本轮已变化，消息先暂存':'已暂存，尚未发送给 Codex');
+    $('draft').value='';$('draft').style.height='auto';renderContext();renderAttachments();updateComposer();
+    toast(armed?'已加入队列，完成后自动继续':'当前轮已变化，消息保留在队列中');
   }catch(err){toast(err.message);}
 }
 async function dispatchQueued(id,{reserved=false}={}){
@@ -336,14 +334,14 @@ async function dispatchQueued(id,{reserved=false}={}){
   const generation=openGeneration,mode=busy?'steer':'message';sending=true;updateComposer();
   try{
     const {text,files,skills,references}=entry.payload;
-    await post(`/api/threads/${entry.threadId}/send`,{text,messageId:entry.requestId,uploadIds:files.map(f=>f.id),mode,skillIds:skills.map(s=>s.id),referenceIds:references.map(r=>r.id)});
-    outbox.done(id);for(const file of files)if(file.preview)URL.revokeObjectURL(file.preview);
+    const result=await post(`/api/threads/${entry.threadId}/send`,{text,messageId:entry.requestId,uploadIds:files.map(f=>f.id),mode,skillIds:skills.map(s=>s.id),referenceIds:references.map(r=>r.id)});
+    outbox.done(id,{mode,turnId:result.result?.turn?.id||result.result?.turnId||null});for(const file of files)if(file.preview)URL.revokeObjectURL(file.preview);
     toast(mode==='steer'?'引导已交给 Codex':'暂存消息已发送');
   }catch(err){
     const unknown=!!err.unknown||err instanceof TypeError;outbox.fail(id,err.message,unknown);
     if(unknown&&generation===openGeneration){uncertain=true;banner('暂存消息发送结果待确认，请先核对电脑是否收到，避免重复发送。');}
     toast(err.message);
-  }finally{if(generation===openGeneration){sending=false;updateComposer();}}
+  }finally{if(generation===openGeneration){sending=false;updateComposer();const next=outbox.observe(currentId,liveViews.get(currentId));if(next)queueMicrotask(()=>dispatchQueued(next.id,{reserved:true}));}}
 }
 function updateComposer() {
   $('draft').disabled = !currentId;
@@ -352,13 +350,12 @@ function updateComposer() {
   $('attach-image').disabled=$('attach-file').disabled=!currentId||sending||uncertain||activeProvider!=='codex';
   for(const button of $('draft-attachments').querySelectorAll('button'))button.disabled=sending||uncertain;
   const steering = busy && activeProvider === 'codex';
-  $('send').textContent = steering ? '暂存' : '↑'; $('send').classList.toggle('steer',steering);
-  $('send').setAttribute('aria-label',steering ? '暂存消息' : '发送消息');
-  $('send').title = steering ? '先暂存，不触发当前任务；稍后手动选择发送方式' : '发送消息';
-  $('send-menu').hidden=!steering;for(const id of ['send-held','send-now','send-after'])$(id).disabled=$('send').disabled;
+  $('send').textContent = '发送'; $('send').classList.remove('steer');
+  $('send').setAttribute('aria-label','发送消息');
+  $('send').title = steering ? '加入队列，本轮完成后自动发送；也可点队列里的引导立即发送' : '发送消息';
   const currentRequests=requestsNow.filter(r=>!r.historical);
   $('stop').hidden = !writable || !busy; $('activity').hidden = !busy || currentRequests.length>0;
-  $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : writable&&currentRequests.length ? '待操作 · 请处理会话里的问题或审批' : busy ? '执行中 · 点发送先暂存，不触发任务' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
+  $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : writable&&currentRequests.length ? '待操作 · 请处理会话里的问题或审批' : busy ? '执行中 · 发送后排队，完成后自动继续' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
   $('char-count').textContent = $('draft').value.length > 5000 ? `${$('draft').value.length}/8000` : '';
   $('model-settings').disabled = !writable || activeProvider !== 'codex';
   $('pick-thread').disabled = !currentId || sending || activeProvider !== 'codex';
@@ -1054,7 +1051,7 @@ async function openThread(id, title) {
   expandedHistorical.clear();
   expandFromId = loadExpansion(id); olderOutsideRange = new Set(); manualProgress.clear();
   selectedSkills = contexts.get(id)?.skills || []; selectedThreads = contexts.get(id)?.threads || []; renderContext();
-  requestSignature = ''; requestsNow = []; $('picker-overlay').hidden = true; $('settings-overlay').hidden = true; $('send-menu').open=false; closeImage();
+  requestSignature = ''; requestsNow = []; $('picker-overlay').hidden = true; $('settings-overlay').hidden = true; closeImage();
   writable = false; busy = false; uncertain = false; sending = false; historyCursor = null;
   currentServiceTier=null;currentServiceTierKnown=false;
   messageMap.clear(); messageNodes.clear(); messageOrder = []; recentIds = new Set(); recentTurnIds = new Set(); $('messages').replaceChildren(); $('requests').replaceChildren();
@@ -1177,9 +1174,6 @@ $('confirm-branch').onclick=async()=>{
   }catch(err){$('branch-error').textContent=err.message;if(!err.unknown){forkRequests.delete(key);try{sessionStorage.removeItem('rc_fork_'+key);}catch{}$('confirm-branch').disabled=false;}}
 };
 $('send').onclick = () => {if(busy&&activeProvider==='codex')stageDraft();else sendDraft('message');};
-$('send-held').onclick=()=>stageDraft();
-$('send-after').onclick=()=>stageDraft(true);
-$('send-now').onclick=()=>{$('send-menu').open=false;if(busy)sendDraft('steer');else toast('本轮已结束，请使用普通发送');};
 async function sendDraft(mode) {
   if ($('send').disabled) return;
   const text = $('draft').value.trim(), id = currentId, generation = openGeneration, messageId = uuid();

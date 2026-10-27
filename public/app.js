@@ -163,7 +163,7 @@ function showPair() {
   notices.reset();collapseNotice();$('notifications-overlay').hidden=true;renderNotices();
   $('messages').replaceChildren(); $('draft').value = ''; drafts.clear();
   contexts.clear(); inputDrafts.clear(); inputStates.clear(); selectedSkills = []; selectedThreads = []; renderContext();
-  quotaData = null; lastQuotaCheck = 0; $('quota-windows').textContent = '连接后读取额度'; $('quota-updated').textContent = '当前电脑登录的 Codex 账号';
+  quotaData = null; lastQuotaCheck = 0; renderHeaderQuota(); $('quota-windows').textContent = '连接后读取额度'; $('quota-updated').textContent = '当前电脑登录的 Codex 账号';
   $('picker-overlay').hidden = true; closeImage();
 }
 function setSidebar(open) {
@@ -251,7 +251,19 @@ function quotaWindowName(window) {
   if (minutes && minutes % 60 === 0) return `${minutes / 60} 小时额度`;
   return minutes ? `${minutes} 分钟额度` : window.kind === 'primary' ? '主额度' : '次额度';
 }
+function renderHeaderQuota(data) {
+  const badge=$('header-quota'),bucket=data?.buckets?.find(b=>b.name==='Codex')||data?.buckets?.[0];
+  const windows=bucket?.windows||[],window=windows.find(w=>w.minutes===10080)||windows.find(w=>w.kind==='primary')||windows[0];
+  const known=typeof window?.remaining==='number'&&Number.isFinite(window.remaining);
+  badge.querySelector('small').textContent=(window?quotaWindowName(window).replace('额度',''):'额度')+(data?.stale?'·上次':'剩余');
+  badge.querySelector('strong').textContent=known?new Intl.NumberFormat('zh-CN',{maximumFractionDigits:1}).format(window.remaining)+'%':'—';
+  badge.classList.toggle('low',known&&window.remaining<20);badge.classList.toggle('stale',!!data?.stale);
+  badge.title=known?`${quotaWindowName(window)}${data.stale?'上次读取':'剩余'} ${window.remaining}% · 点击查看详情`:'额度暂未提供 · 点击查看账号';
+  badge.setAttribute('aria-label',badge.title);
+}
+$('header-quota').onclick=()=>setSidebar(true);
 function renderQuota(data) {
+  renderHeaderQuota(data);
   const container = $('quota-windows'); container.replaceChildren();
   for (const bucket of data.buckets || []) for (const window of bucket.windows || []) {
     const row = document.createElement('div'); row.className = 'quota-window' + (window.remaining !== null && window.remaining < 20 ? ' low' : '');
@@ -278,7 +290,7 @@ async function loadQuota(force = false) {
   try { quotaData = await api('/api/quota'); renderQuota(quotaData); }
   catch {
     if (quotaData) renderQuota({ ...quotaData, stale: true });
-    else { $('quota-windows').textContent = '额度暂时无法读取'; $('quota-updated').textContent = '可点右上角刷新重试'; }
+    else { renderHeaderQuota();$('quota-windows').textContent = '额度暂时无法读取'; $('quota-updated').textContent = '可点右上角刷新重试'; }
   } finally { $('refresh-quota').disabled = false; }
 }
 function setConnection(text, connected, desktopConnected = connected) {
@@ -1326,7 +1338,7 @@ setInterval(() => {
   refreshThreadStatuses();
 }, 5000);
 setInterval(() => {
-  if (!document.hidden && csrf && ($('sidebar').classList.contains('open') || window.matchMedia('(min-width: 721px)').matches)) loadQuota();
+  if (!document.hidden && csrf) loadQuota();
 }, 60000);
 window.addEventListener('pagehide', () => { stopMedia();disconnect(); });
 async function init() {

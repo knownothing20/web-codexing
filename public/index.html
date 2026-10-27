@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#f7f8f5"><meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=45"><title>Remote Coding</title>
+  <link rel="stylesheet" href="/style.css?v=46"><title>Remote Coding</title>
 </head>
 <body>
   <section id="pair-view" class="pair-view">
@@ -31,6 +31,7 @@
     <main class="main">
       <header class="chat-header"><button id="open-sidebar" class="icon-button mobile-only" aria-label="打开会话列表">☰</button>
         <div class="chat-title"><h2 id="thread-title">选择一个会话</h2><div><span id="connection-dot" class="dot muted"></span><span id="connection-label">从左侧选择电脑上的聊天</span></div></div>
+        <button id="header-quota" class="header-quota" aria-label="查看账号额度" title="查看账号额度"><small>剩余额度</small><strong>—</strong></button>
         <button id="open-notifications" class="icon-button notice-bell" title="会话提示" aria-label="会话提示，无新提示" aria-haspopup="dialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span id="notice-count" hidden></span></button>
         <button id="reconnect" class="icon-button" title="重新连接当前会话" aria-label="重新连接当前会话">↻</button>
       </header>
@@ -104,5 +105,5 @@
     </section>
   </div>
   <dialog id="branch-dialog" class="branch-dialog"><h2>分支到新会话</h2><p>新会话保留到这条回复为止的记录，之后的内容不会带入。原会话和未发送的草稿会保留。</p><p id="branch-error" class="error" role="status"></p><div><button id="cancel-branch" type="button">取消</button><button id="confirm-branch" type="button">创建分支</button></div></dialog>
-  <script src="/app.js?v=45" type="module"></script>
+  <script src="/app.js?v=46" type="module"></script>
 </body></html>

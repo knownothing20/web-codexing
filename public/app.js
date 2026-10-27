@@ -889,6 +889,7 @@ async function loadThreads(append = false) {
     for (const thread of data.threads) {
       threadTitles.set(thread.id,thread.title);if(threadTitles.size>500)threadTitles.delete(threadTitles.keys().next().value);
       const button = document.createElement('button'); button.className = 'thread-row' + (thread.id === currentId ? ' selected' : ''); button.dataset.id = thread.id;
+      button.dataset.updatedAt=thread.updatedAt;
       const title = document.createElement('strong'); title.textContent = thread.title;
       const meta = document.createElement('small'), project = document.createElement('span'), time = document.createElement('time');
       const date = new Date(thread.updatedAt), today = date.toDateString() === new Date().toDateString();
@@ -917,6 +918,16 @@ async function loadThreads(append = false) {
   } catch (err) { toast(err.message); if (activeProvider !== 'codex') renderIntegration(err.message); }
   finally { if (generation === listGeneration) $('refresh-list').disabled = false; }
 }
+let threadSortFrame;
+function sortThreadRows() {
+  if(threadSortFrame)return;
+  threadSortFrame=requestAnimationFrame(()=>{
+    threadSortFrame=null;
+    const list=$('threads'),rows=[...list.querySelectorAll('.thread-row')],top=list.scrollTop;
+    const sorted=[...rows].sort((a,b)=>Number(b.dataset.running==='true')-Number(a.dataset.running==='true')||Number(b.dataset.updatedAt)-Number(a.dataset.updatedAt)||b.dataset.id.localeCompare(a.dataset.id));
+    if(sorted.some((row,i)=>row!==rows[i])){for(const row of sorted)list.append(row);list.scrollTop=top;}
+  });
+}
 function paintThreadStatus(id,status,completionKey,completedAt,availability,attention,verified) {
   availability=availability ?? threadStatuses.get(id)?.availability ?? 'unknown';
   attention=attention??threadStatuses.get(id)?.pendingKey;
@@ -928,6 +939,7 @@ function paintThreadStatus(id,status,completionKey,completedAt,availability,atte
   observeNotice({id,title:threadTitles.get(id)|| (id===currentId?$('thread-title').textContent:'未命名会话'),status,completionKey:threadCompletion.get(id),unread,availability,pendingKey:attention,pendingVerified:verified});
   if(unread)status='unread';
   const row=[...$('threads').children].find(el=>el.dataset.id===id);if(!row)return;
+  row.dataset.running=String(status==='running');sortThreadRows();
   let loadBadge=row.querySelector('.thread-availability');
   if(availability==='notLoaded') {
     if(!loadBadge){loadBadge=document.createElement('span');loadBadge.className='thread-availability';row.querySelector('small').insertBefore(loadBadge,row.querySelector('time'));}

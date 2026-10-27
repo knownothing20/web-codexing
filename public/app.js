@@ -879,13 +879,12 @@ function closePicker() { ++pickerGeneration; $('picker-overlay').hidden = true; 
 async function loadThreads(append = false) {
   const generation = ++listGeneration;
   const started=Date.now();
-  const listScrollTop = $('threads').scrollTop;
   $('refresh-list').disabled = true;
   try {
     const data = await api(`${activeProvider === 'codex' ? '/api/threads' : '/api/providers/' + activeProvider + '/threads'}?offset=${append ? threadNext || 0 : 0}&q=${encodeURIComponent(listQuery)}${activeProvider === 'codex' ? '&recentDays=7' : ''}`);
     if (generation !== listGeneration) return;
     lastListRead=Date.now();
-    if (!append) $('threads').replaceChildren();
+    if (!append) { pendingThreadAnchor=captureThreadAnchor();$('threads').replaceChildren(); }
     for (const thread of data.threads) {
       threadTitles.set(thread.id,thread.title);if(threadTitles.size>500)threadTitles.delete(threadTitles.keys().next().value);
       const button = document.createElement('button'); button.className = 'thread-row' + (thread.id === currentId ? ' selected' : ''); button.dataset.id = thread.id;
@@ -894,7 +893,7 @@ async function loadThreads(append = false) {
       const meta = document.createElement('small'), project = document.createElement('span'), time = document.createElement('time');
       const date = new Date(thread.updatedAt), today = date.toDateString() === new Date().toDateString();
       project.textContent = thread.project;
-      time.textContent = date.toLocaleString('zh-CN', today ? {hour:'2-digit',minute:'2-digit',hour12:false} : {month:'numeric',day:'numeric'});
+      time.textContent = date.toLocaleString('zh-CN', { ...(today?{}:{month:'numeric',day:'numeric'}),hour:'2-digit',minute:'2-digit',hour12:false });
       time.title = '最近活动：' + date.toLocaleString('zh-CN', {hour12:false});
       const heading=document.createElement('div');heading.className='thread-row-heading';heading.append(title);
       meta.append(project, time); button.append(heading, meta); button.onclick = () => openThread(thread.id, thread.title); $('threads').append(button);
@@ -907,7 +906,6 @@ async function loadThreads(append = false) {
       empty.textContent = listQuery ? '最近 7 天没有匹配的会话' : '最近 7 天没有会话';
       $('threads').append(empty);
     }
-    $('threads').scrollTop = listScrollTop;
     if (!currentId && data.threads.length) {
       const saved = sessionStorage.getItem('rc_thread_' + activeProvider) || (activeProvider === 'codex' ? sessionStorage.getItem('rc_thread') : null);
       const first = data.threads.find(t => t.id === saved) || data.threads[0]; await openThread(first.id, first.title);
@@ -918,14 +916,35 @@ async function loadThreads(append = false) {
   } catch (err) { toast(err.message); if (activeProvider !== 'codex') renderIntegration(err.message); }
   finally { if (generation === listGeneration) $('refresh-list').disabled = false; }
 }
-let threadSortFrame;
+let threadSortFrame,pendingThreadAnchor;
+function captureThreadAnchor() {
+  const list=$('threads'),bounds=list.getBoundingClientRect();
+  const row=[...list.querySelectorAll('.thread-row')].find(row=>row.getBoundingClientRect().bottom>bounds.top);
+  return {top:list.scrollTop,id:row?.dataset.id,offset:row?row.getBoundingClientRect().top-bounds.top:0};
+}
 function sortThreadRows() {
   if(threadSortFrame)return;
   threadSortFrame=requestAnimationFrame(()=>{
     threadSortFrame=null;
-    const list=$('threads'),rows=[...list.querySelectorAll('.thread-row')],top=list.scrollTop;
+    const list=$('threads'),rows=[...list.querySelectorAll('.thread-row')],anchor=pendingThreadAnchor||captureThreadAnchor();
+    pendingThreadAnchor=null;
     const sorted=[...rows].sort((a,b)=>Number(b.dataset.running==='true')-Number(a.dataset.running==='true')||Number(b.dataset.updatedAt)-Number(a.dataset.updatedAt)||b.dataset.id.localeCompare(a.dataset.id));
-    if(sorted.some((row,i)=>row!==rows[i])){for(const row of sorted)list.append(row);list.scrollTop=top;}
+    const ordered=[];
+    for(const running of [true,false]){
+      const group=sorted.filter(row=>(row.dataset.running==='true')===running);
+      let heading=list.querySelector(`[data-thread-group="${running}"]`);
+      if(!group.length){heading?.remove();continue;}
+      if(!heading){heading=document.createElement('div');heading.className='thread-group';heading.dataset.threadGroup=String(running);}
+      heading.textContent=running?'进行中 · 最近活动优先':'最近会话 · 时间倒序';ordered.push(heading,...group);
+    }
+    // Move only rows whose position changed; preserve the visible chat, not just a pixel offset.
+    ordered.forEach((row,i)=>{if(list.children[i]!==row)list.insertBefore(row,list.children[i]||null);});
+    if(anchor.top===0)list.scrollTop=0;
+    else {
+      const row=rows.find(row=>row.dataset.id===anchor.id);
+      if(row)list.scrollTop+=row.getBoundingClientRect().top-list.getBoundingClientRect().top-anchor.offset;
+      else list.scrollTop=anchor.top;
+    }
   });
 }
 function paintThreadStatus(id,status,completionKey,completedAt,availability,attention,verified) {
@@ -1346,7 +1365,7 @@ document.addEventListener('visibilitychange', () => {
 });
 // Lightweight metadata only; no chat/history reload, including paginated lists.
 setInterval(() => {
-  if(listIsVisible()&&csrf&&!$('refresh-list').disabled&&$('threads').children.length<=40&&Date.now()-lastListRead>=30000){loadThreads();return;}
+  if(listIsVisible()&&csrf&&!$('refresh-list').disabled&&$('threads').querySelectorAll('.thread-row').length<=40&&Date.now()-lastListRead>=30000){loadThreads();return;}
   refreshThreadStatuses();
 }, 5000);
 setInterval(() => {

@@ -2,7 +2,7 @@ import { createReadTracker } from './read-state.js?v=32';
 import {accelerated,effectiveTier,fastTier,sameTier,tierKind} from './service-tier.js?v=32';
 import {createNotifications,pendingKey} from './notifications.js?v=32';
 import {copyText} from './clipboard.js?v=33';
-import {inlineParts} from './inline-format.js?v=38';
+import {inlineParts} from './inline-format.js?v=45';
 import {createOutbox} from './outbox.js?v=44';
 const $ = id => document.getElementById(id);
 const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高', ultra: '极高' };
@@ -77,6 +77,7 @@ function threadPath(id, action) { return activeProvider === 'codex' ? `/api/thre
 let messageOrder = [], recentIds = new Set(), recentTurnIds = new Set(), toastTimer;
 let currentModel = '', currentEffort = '', modelCatalog = [], settingsBaseline, hasUnread = false;
 let currentServiceTier=null,currentServiceTierKnown=false,speedDirty=false,speedConflict=false,settingsSaving=false;
+let modelDirty=false;
 function renderModelLabel() {
   const speed=tierKind(currentServiceTier);
   $('model-label').textContent=[currentModel,currentEffort?effortNames[currentEffort]||currentEffort:'桌面默认',speed==='fast'?'⚡ 加速':speed==='ultrafast'?'⚡ 超级加速':''].filter(Boolean).join(' · ');
@@ -1002,6 +1003,10 @@ function connectEvents(id, generation) {
       currentModel = data.model || ''; currentEffort = data.effort || '';
       currentServiceTier=data.serviceTier??null;currentServiceTierKnown=data.serviceTierKnown===true;renderModelLabel();
       if(!$('settings-overlay').hidden&&settingsBaseline?.id===currentId) {
+        if(!modelDirty&&!settingsSaving&&(settingsBaseline.model!==currentModel||settingsBaseline.effort!==currentEffort)){
+          settingsBaseline.model=currentModel;settingsBaseline.effort=currentEffort;
+          if(modelCatalog.some(m=>m.id===currentModel)){$('model-select').value=currentModel;populateEfforts(currentEffort);}
+        }
         if(speedDirty&&!settingsSaving&&(!currentServiceTierKnown||!sameTier(settingsBaseline.serviceTier,currentServiceTier))){speedConflict=true;$('settings-error').textContent='电脑端加速设置已改变，请关闭后重新打开设置。';$('save-settings').disabled=true;}
         else if(!speedDirty){settingsBaseline.serviceTier=currentServiceTier;settingsBaseline.serviceTierKnown=currentServiceTierKnown;}
         populateSpeed();
@@ -1214,6 +1219,17 @@ new ResizeObserver(entries => {
 }).observe(document.querySelector('.composer-wrap'));
 
 function closeSettings() { $('settings-overlay').hidden = true; $('model-settings').focus(); }
+function renderModelChoices() {
+  $('model-choices').replaceChildren();
+  for(const model of modelCatalog){
+    const button=document.createElement('button');button.type='button';
+    button.setAttribute('aria-pressed',String(model.id===$('model-select').value));
+    const name=document.createElement('span'),mark=document.createElement('small');
+    name.textContent=model.name||model.id;mark.textContent=model.id===currentModel?'当前':model.id===$('model-select').value?'已选':'';
+    button.append(name,mark);button.onclick=()=>{modelDirty=true;$('model-select').value=model.id;populateEfforts(currentEffort);};
+    $('model-choices').append(button);
+  }
+}
 function populateSpeed() {
   const model=modelCatalog.find(m=>m.id===$('model-select').value),switcher=$('fast-mode');
   const current=effectiveTier(currentServiceTier,model);
@@ -1230,6 +1246,14 @@ function populateEfforts(preferred) {
   }
   $('effort-select').value = model?.efforts.includes(preferred) ? preferred : model?.defaultEffort || model?.efforts[0] || '';
   $('effort-select').disabled = !model?.efforts.length;
+  $('effort-choices').replaceChildren();
+  for(const value of model?.efforts||[]){
+    const button=document.createElement('button');button.type='button';button.textContent=effortNames[value]||value;
+    button.setAttribute('aria-pressed',String(value===$('effort-select').value));
+    button.onclick=()=>{modelDirty=true;$('effort-select').value=value;for(const b of $('effort-choices').children)b.setAttribute('aria-pressed',String(b===button));};
+    $('effort-choices').append(button);
+  }
+  renderModelChoices();
   $('model-description').textContent = model?.description || '';
   $('save-settings').disabled = !model || !$('effort-select').value || speedConflict || settingsSaving;
   populateSpeed();
@@ -1237,7 +1261,8 @@ function populateEfforts(preferred) {
 $('model-settings').onclick = async () => {
   $('settings-overlay').hidden = false; $('settings-error').textContent = '';
   $('save-settings').disabled = true; $('model-select').disabled = true;
-  speedDirty=false;speedConflict=false;settingsSaving=false;
+  speedDirty=false;speedConflict=false;settingsSaving=false;modelDirty=false;
+  $('model-choices').textContent='正在更新模型目录…';$('effort-choices').replaceChildren();
   settingsBaseline = { id: currentId, model: currentModel, effort: currentEffort,serviceTier:currentServiceTier,serviceTierKnown:currentServiceTierKnown };
   $('fast-mode').disabled=true;
   try {
@@ -1249,7 +1274,7 @@ $('model-settings').onclick = async () => {
       option.textContent = model.id + (model.id === currentModel ? '（当前）' : ''); $('model-select').append(option);
     }
     if (modelCatalog.some(m => m.id === currentModel)) $('model-select').value = currentModel;
-    $('model-select').disabled = false; populateEfforts(currentEffort); $('model-select').focus();
+    $('model-select').disabled = false; populateEfforts(currentEffort); $('model-choices').querySelector('[aria-pressed="true"]')?.focus();
   } catch (err) { $('settings-error').textContent = err.message; }
 };
 $('model-select').onchange = () => populateEfforts(currentEffort);

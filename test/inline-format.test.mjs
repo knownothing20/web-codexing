@@ -16,3 +16,10 @@ test('web links, code and emphasis remain distinct and unsafe protocols are iner
   for(const destination of ['javascript:alert','file:///C:/secret.txt','data:text/plain,hello','https://'])assert.equal(inlineParts(`[标签](${destination})`)[0].type,'text');
   assert.deepEqual(inlineParts('普通文字 [未完成'),[{type:'text',text:'普通文字 [未完成'}]);
 });
+
+test('native output citations use compact file references without executing directives',()=>{
+  const file=inlineParts(':codex-file-citation{path="C:/Example/方案 输出.pdf" purpose="output"}')[0];
+  assert.equal(file.type,'file');assert.equal(file.name,'方案 输出.pdf');assert.equal(file.extension,'PDF');
+  assert.equal(inlineParts('`:codex-file-citation{path="/srv/example.pdf" purpose="output"}`')[0].type,'code');
+  assert.equal(inlineParts(':codex-file-citation{path="javascript:alert(1)" purpose="output"}')[0].type,'text');
+});

@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#f7f8f5"><meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=44"><title>Remote Coding</title>
+  <link rel="stylesheet" href="/style.css?v=45"><title>Remote Coding</title>
 </head>
 <body>
   <section id="pair-view" class="pair-view">
@@ -90,9 +90,11 @@
     <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div class="settings-heading"><div><span class="eyebrow">CURRENT CONVERSATION</span><h2 id="settings-title">模型与加速设置</h2></div><button id="close-settings" class="icon-button" aria-label="关闭模型设置">×</button></div>
       <p class="settings-intro">与电脑端的这条会话同步，保存后用于下一轮回复。</p>
-      <label for="model-select">模型</label><select id="model-select" disabled><option>正在读取模型目录…</option></select>
+      <label id="model-choice-label">模型</label><select id="model-select" hidden disabled><option>正在读取模型目录…</option></select>
+      <div id="model-choices" class="model-choices" role="group" aria-labelledby="model-choice-label">正在读取模型目录…</div>
       <p id="model-description" class="model-description"></p>
-      <label for="effort-select">思考档位</label><select id="effort-select" disabled></select>
+      <label id="effort-choice-label">思考档位</label><select id="effort-select" hidden disabled></select>
+      <div id="effort-choices" class="effort-choices" role="group" aria-labelledby="effort-choice-label"></div>
       <p class="effort-note">更高档位通常需要更多时间。当前正在执行的回复继续使用原设置。</p>
       <div class="fast-setting"><label for="fast-mode"><strong>模型加速 <span id="fast-status">正在读取…</span></strong><small>跟随电脑端设置</small></label><input id="fast-mode" type="checkbox" role="switch" disabled aria-describedby="fast-note"></div>
       <p id="fast-note" class="fast-note">开启后会更快消耗额度。</p>
@@ -102,5 +104,5 @@
     </section>
   </div>
   <dialog id="branch-dialog" class="branch-dialog"><h2>分支到新会话</h2><p>新会话保留到这条回复为止的记录，之后的内容不会带入。原会话和未发送的草稿会保留。</p><p id="branch-error" class="error" role="status"></p><div><button id="cancel-branch" type="button">取消</button><button id="confirm-branch" type="button">创建分支</button></div></dialog>
-  <script src="/app.js?v=44" type="module"></script>
+  <script src="/app.js?v=45" type="module"></script>
 </body></html>

@@ -67,10 +67,15 @@ export async function getSkills(cwd) {
 }
 
 export async function getModels() {
-  if (cached && cached.until > Date.now()) return cached.value;
+  // Desktop upgrades and its local catalog updates invalidate this cache on demand.
+  // No background polling or permanent helper process is needed.
+  const binary = executable();
+  const stamp = path => { try { const s=statSync(path);return `${s.mtimeMs}:${s.size}`; } catch { return ''; } };
+  const revision = binary + ':' + stamp(binary) + ':' + stamp(join(process.env.CODEX_HOME || join(homedir(), '.codex'), 'models_cache.json'));
+  if (cached && cached.revision === revision && cached.until > Date.now()) return cached.value;
   if (pending) return pending;
   pending = readModels().then(value => {
-    cached = { value, until: Date.now() + 5 * 60000 }; return value;
+    cached = { value, revision, until: Date.now() + 5 * 60000 }; return value;
   }).finally(() => { pending = null; });
   return pending;
 }

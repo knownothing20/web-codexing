@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import net from 'node:net';
 import { FrameReader, frame } from '../src/ipc.mjs';
 import {catalogFixture} from './catalog-fixture.mjs';
+import {wave} from './audio-fixture.mjs';
 
 const base = resolve('.local'); mkdirSync(base, { recursive: true });
 const fixture = mkdtempSync(join(base, 'ui-test-')), id = randomUUID(), pipe = '\\\\.\\pipe\\remote-coding-ui-' + randomUUID();
@@ -20,9 +21,10 @@ const manyMode=process.argv.includes('--many'),manyIds=new Set();
 const mediaDetailsMode=process.argv.includes('--media-details');
 const generatedMode=process.argv.includes('--generated');
 const fileLinksMode=process.argv.includes('--file-links');
+const audioMode=process.argv.includes('--audio');
 const mediaMode=process.argv.includes('--media')||mediaDetailsMode;
 const actionsMode=process.argv.includes('--actions');
-const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode||specialMode||generatedMode||fileLinksMode;
+const settingsMode=process.argv.includes('--settings')||mediaMode||actionsMode||specialMode||generatedMode||fileLinksMode||audioMode;
 let ownerReads=0,fullFollows=0,starts=0,steers=0,stops=0;const checkedIds=new Set();
 const metrics=()=>{if(manyMode||fileLinksMode)writeFileSync(join(fixture,'metrics.json'),JSON.stringify({ownerReads,uniqueOwnerReads:checkedIds.size,fullFollows,starts,steers,stops}));};
 const db = new DatabaseSync(join(fixture, 'state_5.sqlite'));
@@ -85,6 +87,16 @@ if(mediaMode){
   if(mediaDetailsMode)state.turns[0].items[1].text=`这次图片放在对应的折叠预览里，点击下面的按钮查看。\n\n<details>\n<summary>手机预览图</summary>\n\n![山景](${photos[0]})\n![日落](${photos[1]})\n[演示视频](${clip})\n\n</details>\n\n这里是预览块之后的说明。`;
   const d=new DatabaseSync(join(fixture,'state_5.sqlite'));d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);d.close();
   const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,'turn',2,'media-answer','agentMessage',JSON.stringify(state.turns[0].items[1]),Date.now());h.close();
+}
+if(audioMode){
+  const first=join(fixture,'sample-one.wav'),second=join(fixture,'sample-two.wav');
+  writeFileSync(first,wave(4,440));writeFileSync(second,wave(5,330));
+  state.title='音频试听 · 手机预览';
+  state.turns[0].items=[{id:'audio-user',type:'userMessage',content:[{type:'text',text:'这两段音频可以直接在手机试听吗？'}]},
+    {id:'audio-answer',type:'agentMessage',phase:'final_answer',text:`可以，点播放后才从电脑加载，支持拖动进度和下载。\n\n**新版：清晰试听 · 4 秒**\n\n![新版试听](<${first}>)\n\n**原版：对比试听 · 5 秒**\n\n![原版试听](<${second}>)`}];
+  const d=new DatabaseSync(join(fixture,'state_5.sqlite'));d.prepare('UPDATE threads SET name=?,title=? WHERE id=?').run(state.title,state.title,id);d.close();
+  const h=new DatabaseSync(join(fixture,'thread_history_1.sqlite'));h.prepare('DELETE FROM thread_items WHERE thread_id=?').run(id);
+  for(const [i,item] of state.turns[0].items.entries())h.prepare('INSERT INTO thread_items VALUES(?,?,?,?,?,?,?)').run(id,'turn',i+1,item.id,item.type,JSON.stringify(item),Date.now());h.close();
 }
 if(generatedMode){
   const {default:sharp}=await import('sharp');

@@ -1,4 +1,4 @@
-import { imageSources, videoSources } from './attachments.mjs';
+import { imageSources, videoSources, audioSources } from './attachments.mjs';
 import { specialMessageFromItem } from './special-items.mjs';
 import { referencedUserText } from './references.mjs';
 import {generatedImageMessage,groupGeneratedImages} from './generated-images.mjs';
@@ -81,13 +81,13 @@ export function messageFromItem(item, turnId = '', index = 0) {
     const attachments = raw.trimStart().startsWith('# Files mentioned by the user:') ? [...raw.matchAll(/^## ([^\n]+?): [^\n]+$/gm)].map(m => m[1]).filter(name => name !== 'My request') : [];
     return { id, turnId, role: 'user', text: referenced.contextPrefix ? referenced.text : visibleUserText(referenced.text), attachments, references,
       skills: (item.content || item.input || []).filter?.(c => c.type === 'skill').map(c => c.name) || [],
-      imageSources: imageSources(item, raw), videoSources: videoSources(item, raw),
+      imageSources: imageSources(item, raw), videoSources: videoSources(item, raw), audioSources: audioSources(item, raw),
       questionReply: raw.startsWith('<send_user_message_question_reply>'),
       guidance: item.type==='steeringUserMessage' && !raw.trimStart().startsWith('<send_user_message_question_reply>'), kind: 'message' };
   }
   if (item.type === 'agentMessage') {
     return { id, turnId, role: 'assistant', text: (item.text || '').replace(/:codex-annotation\{index="\d+"\}/g, ''), phase: item.phase || 'final_answer',
-      imageSources: imageSources(item, item.text || ''), videoSources: videoSources(item, item.text || ''),
+      imageSources: imageSources(item, item.text || ''), videoSources: videoSources(item, item.text || ''), audioSources: audioSources(item, item.text || ''),
       kind: item.questions?.length ? 'question' : 'message' };
   }
   if (item.type === 'error') return { id, turnId, role: 'system', text: item.message || item.error?.message || '执行发生错误', kind: 'error' };
@@ -108,7 +108,7 @@ export function messagesFromTurns(turns) {
       if (text) messages.unshift({ id: `input:${turn.turnId}`, turnId: turn.turnId, role: 'user', kind: 'message', text, at: turn.turnStartedAtMs || null, timeSource: 'turn' });
     }
     return messages;
-  }).filter(m => m.text || m.imageSources?.length || m.videoSources?.length));
+  }).filter(m => m.text || m.imageSources?.length || m.videoSources?.length || m.audioSources?.length));
   let question;
   for (const m of messages) {
     if (m.kind === 'question') { question = m; m.questionAnswered = false; }

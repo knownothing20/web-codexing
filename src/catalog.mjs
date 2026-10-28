@@ -114,7 +114,7 @@ export class Catalog {
       const last=this.history.prepare(`SELECT turn_id,item_id,MAX(rollout_ordinal) FROM thread_items WHERE thread_id=? AND turn_id IN (${slots}) AND item_type='agentMessage' GROUP BY turn_id`).all(id,...ids);
       for(const row of last)if(completed.has(row.turn_id))branchable.add(row.item_id);
     }
-    const messages=page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), branchable:branchable.has(r.item_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length || m?.videoSources?.length);
+    const messages=page.map(r => ({ ...messageFromItem(JSON.parse(r.item_json), r.turn_id), branchable:branchable.has(r.item_id), at: r.created_at_ms, timeSource: 'recorded' })).filter(m => m?.text || m?.imageSources?.length || m?.videoSources?.length || m?.audioSources?.length);
     const imageTurns=[...new Set(messages.filter(m=>m.kind==='generatedImages'||m.role==='assistant'&&m.kind==='message'&&m.phase!=='commentary').map(m=>m.turnId))];
     // Complete a turn's image group even when the history cursor splits it.
     let generatedOrder;
@@ -178,7 +178,7 @@ export class Catalog {
           if (text.startsWith('# AGENTS.md instructions') || text.startsWith('<environment_context>')) continue;
           const message=messageFromItem({...p,id:p.id||`legacy:${linePos}`,type:p.role==='user'?'userMessage':'agentMessage',text:raw,
             content:[{type:'text',text:raw},...(p.content||[]).filter(c=>!['input_text','output_text'].includes(c.type))]});
-          if(!message.text&&!message.imageSources?.length&&!message.videoSources?.length)continue;
+          if(!message.text&&!message.imageSources?.length&&!message.videoSources?.length&&!message.audioSources?.length)continue;
           found.push({ ...message,
             at: e.timestamp ? Date.parse(e.timestamp) : null, timeSource: 'recorded', _pos: linePos });
         } catch { /* incomplete tail or non-message */ }

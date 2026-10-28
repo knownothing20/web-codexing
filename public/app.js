@@ -403,7 +403,8 @@ function addTime(parent, message) {
 }
 function imageGallery(body, message, visibleIds=null) {
   const items=[...(message.images||[]).map(p=>({...p,kind:'image'})),...(message.videos||[]).map(p=>({...p,kind:'video'}))];
-  if (!items.some(p=>!visibleIds||visibleIds.has(p.id))) return;
+  const sounds=(message.audios||[]).filter(p=>!visibleIds||visibleIds.has(p.id));
+  if (!items.some(p=>!visibleIds||visibleIds.has(p.id))&&!sounds.length) return;
   const gallery = document.createElement('div'); gallery.className = 'image-gallery';
   for (const [index,picture] of items.entries()) {
     if(visibleIds&&!visibleIds.has(picture.id))continue;
@@ -423,11 +424,24 @@ function imageGallery(body, message, visibleIds=null) {
     };
     button.append(caption); gallery.append(button);
   }
-  body.append(gallery);
+  if(gallery.childElementCount)body.append(gallery);
+  for(const sound of sounds){
+    const card=document.createElement('section');card.className='audio-card';card.setAttribute('aria-label','音频：'+sound.name);
+    const heading=document.createElement('div'),title=document.createElement('strong'),download=document.createElement('a');
+    title.textContent='♫ '+sound.name;download.textContent='下载';download.href=sound.url+'?download=1';download.download=sound.fileName;download.setAttribute('aria-label','下载音频：'+sound.name);
+    const player=document.createElement('audio');player.controls=true;player.preload='none';player.src=sound.url;player.setAttribute('aria-label','播放音频：'+sound.name);
+    const note=document.createElement('small');note.textContent='点击播放 · 从电脑按需加载';
+    player.onplay=()=>{pauseAudios(player);$('full-video').pause();note.textContent='正在播放';};
+    player.onpause=()=>{if(!player.error)note.textContent=player.ended?'播放完毕':'已暂停';};
+    player.onended=()=>{note.textContent='播放完毕';};
+    player.onerror=()=>{note.textContent='无法播放：格式不兼容或原文件不可用，可下载后查看。';card.classList.add('audio-error');};
+    heading.append(title,download);card.append(heading,player,note);body.append(card);
+  }
 }
+function pauseAudios(except=null) { for(const player of document.querySelectorAll('.audio-card audio'))if(player!==except&&!player.paused)player.pause(); }
 function stopMedia() { const video=$('full-video');video.pause();video.removeAttribute('src');video.load();$('full-image').removeAttribute('src'); }
 function showMedia() {
-  stopMedia();const item=mediaItems[mediaIndex];if(!item)return;
+  pauseAudios();stopMedia();const item=mediaItems[mediaIndex];if(!item)return;
   const isVideo=item.kind==='video';$('image-overlay').classList.remove('original-size');$('image-size').textContent='查看原图尺寸';$('image-size').hidden=isVideo;
   $('full-image').hidden=isVideo;$('full-video').hidden=!isVideo;$('media-error').hidden=true;
   $('media-counter').textContent=`${mediaIndex+1} / ${mediaItems.length}`;
@@ -488,7 +502,7 @@ function inline(parent, text) {
 }
 function markdown(text, message=null, depth=0) {
   const frag = document.createDocumentFragment(), lines = text.split('\n');
-  const mediaIds=new Set([...(message?.images||[]),...(message?.videos||[])].map(p=>p.id));
+  const mediaIds=new Set([...(message?.images||[]),...(message?.videos||[]),...(message?.audios||[])].map(p=>p.id));
   let paragraph = [], list = null;
   const flush = () => { if (paragraph.length) { const p = document.createElement('p'); inline(p, paragraph.join('\n')); frag.append(p); paragraph = []; } list = null; };
   for (let i = 0; i < lines.length; i++) {
@@ -577,8 +591,9 @@ function renderMessage(message) {
       const files = document.createElement('div'); files.className = 'attachment-chips';
       const images = message.attachments.filter(name => /\.(png|jpe?g|webp|gif)$/i.test(name)).length;
       const videos=message.attachments.filter(name=>/\.(mp4|m4v|webm|mov)$/i.test(name)).length;
-      const other = message.attachments.length - images - videos;
-      files.textContent = [images ? `▧ ${images} 张图片` : '',videos?`▷ ${videos} 个视频`:'', other ? `▤ ${other} 个附件` : ''].filter(Boolean).join(' · ');
+      const audios=message.attachments.filter(name=>/\.(wav|mp3|m4a|ogg|flac)$/i.test(name)).length;
+      const other = message.attachments.length - images - videos - audios;
+      files.textContent = [images ? `▧ ${images} 张图片` : '',videos?`▷ ${videos} 个视频`:'',audios?`♫ ${audios} 个音频`:'', other ? `▤ ${other} 个附件` : ''].filter(Boolean).join(' · ');
       body.append(files);
     }
     // Compatibility with stored messages from an older bridge during a live upgrade.
@@ -627,7 +642,7 @@ function renderMessage(message) {
   } else {
     const text = (message.mediaText??message.text).replace(/:codex-annotation\{index="\d+"\}/g, '');
     const placedIds=new Set([...text.matchAll(/^\s*\[rc-media:([a-f0-9]{64})\]\s*$/gm)].map(m=>m[1]));
-    const unplacedIds=new Set([...(message.images||[]),...(message.videos||[])].map(p=>p.id).filter(id=>!placedIds.has(id)));
+    const unplacedIds=new Set([...(message.images||[]),...(message.videos||[]),...(message.audios||[])].map(p=>p.id).filter(id=>!placedIds.has(id)));
     imageGallery(body,message,unplacedIds);
     body.append(markdown(text,message));
   }
@@ -1360,7 +1375,7 @@ $('save-settings').onclick = async () => {
 };
 $('logout').onclick = async () => { try { await post('/api/logout', {});for(const entry of outbox.clear())for(const file of entry.payload.files)if(file.preview)URL.revokeObjectURL(file.preview);sessionStorage.clear(); showPair(); } catch (err) { toast(err.message); } };
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { if(!$('image-overlay').hidden)closeImage();disconnect(); collapseNotice(); writable = false; updateComposer(); }
+  if (document.hidden) { pauseAudios();if(!$('image-overlay').hidden)closeImage();disconnect(); collapseNotice(); writable = false; updateComposer(); }
   else if (csrf) { if (currentId) connectEvents(currentId, openGeneration); loadThreads(); loadQuota(); }
 });
 // Lightweight metadata only; no chat/history reload, including paginated lists.
@@ -1371,7 +1386,7 @@ setInterval(() => {
 setInterval(() => {
   if (!document.hidden && csrf) loadQuota();
 }, 60000);
-window.addEventListener('pagehide', () => { stopMedia();disconnect(); });
+window.addEventListener('pagehide', () => { pauseAudios();stopMedia();disconnect(); });
 async function init() {
   const pairing = new URLSearchParams(location.hash.slice(1)).get('pair');
   if (pairing) {

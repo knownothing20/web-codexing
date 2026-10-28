@@ -8,7 +8,7 @@ function replaceMediaLinks(text, replace) {
   let fenced=false;
   return text.split('\n').map(line=>{
     if(/^\s*```/.test(line)){fenced=!fenced;return line;}
-    return fenced?line:line.replace(/!?\[([^\]]*)\]\(<?((?:[A-Za-z]:[\\/]|\/)[^\n]*?\.(?:png|jpe?g|gif|webp|mp4|m4v|webm|mov))>?\)/gi,replace);
+    return fenced?line:line.replace(/!?\[([^\]]*)\]\(<?((?:[A-Za-z]:[\\/]|\/)[^\n]*?\.(?:png|jpe?g|gif|webp|mp4|m4v|webm|mov|wav|mp3|m4a|ogg|flac))>?\)/gi,replace);
   }).join('\n');
 }
 function localSources(item, raw, extension, localType) {
@@ -31,6 +31,7 @@ function localSources(item, raw, extension, localType) {
 }
 export const imageSources = (item, raw = '') => localSources(item, raw, /\.(png|jpe?g|gif|webp)$/i, 'localImage');
 export const videoSources = (item, raw = '') => localSources(item, raw, /\.(mp4|m4v|webm|mov)$/i, 'localVideo');
+export const audioSources = (item, raw = '') => localSources(item, raw, /\.(wav|mp3|m4a|ogg|flac)$/i, 'localAudio');
 
 export function byteRange(header, size) {
   if (!header) return { start: 0, end: size - 1, partial: false };
@@ -52,19 +53,19 @@ function mime(bytes) {
 export class ImageStore {
   constructor() { this.key = randomBytes(32); this.entries = new Map(); this.thumbs=new Map();this.thumbBytes=0;this.thumbJobs=new Map();this.thumbTail=Promise.resolve(); }
   project(message, threadId) {
-    const { imageSources: sources = [], videoSources: clips = [], ...publicMessage } = message;
+    const { imageSources: sources = [], videoSources: clips = [], audioSources: sounds = [], ...publicMessage } = message;
     const register = (source, kind) => {
       const id = createHmac('sha256', this.key).update(threadId + '\0' + kind + '\0' + (source.path || source.data)).digest('hex');
       this.entries.delete(id); this.entries.set(id, {...source,kind});
       if (this.entries.size > 768) this.entries.delete(this.entries.keys().next().value);
-      const url='/api/'+(kind==='image'?'images/':'videos/')+id;
+      const url='/api/'+({image:'images/',video:'videos/',audio:'audios/'})[kind]+id;
       const fileName=source.path?basename(source.path):'image.'+(source.data?.startsWith('data:image/jpeg')?'jpg':source.data?.match(/^data:image\/(\w+)/)?.[1]||'png');
       return { id, name: source.name, fileName, url, ...(source.generated?{generated:true}:{}), ...(kind==='image'?{thumbnailUrl:url+'?size=thumb'}:{}) };
     };
-    const images=sources.map(source=>register(source,'image')),videos=clips.map(source=>register(source,'video'));
+    const images=sources.map(source=>register(source,'image')),videos=clips.map(source=>register(source,'video')),audios=sounds.map(source=>register(source,'audio'));
     // Preserve placement (including collapsed previews) without sending filesystem paths.
     const key=path=>process.platform==='win32'?path.toLowerCase():path;
-    const paths=new Map([...sources.map((source,i)=>[source,images[i]]),...clips.map((source,i)=>[source,videos[i]])].filter(([source])=>source.path).map(([source,media])=>[key(source.path),media.id]));
+    const paths=new Map([...sources.map((source,i)=>[source,images[i]]),...clips.map((source,i)=>[source,videos[i]]),...sounds.map((source,i)=>[source,audios[i]])].filter(([source])=>source.path).map(([source,media])=>[key(source.path),media.id]));
     if(typeof publicMessage.text==='string'&&paths.size){
       let placed=false;
       const mediaText=replaceMediaLinks(publicMessage.text,(link,label,path)=>{
@@ -73,7 +74,7 @@ export class ImageStore {
       });
       if(placed){publicMessage.mediaText=mediaText;publicMessage.text=mediaText.replace(/^\[rc-media:[a-f0-9]{64}\]$/gm,'');}
     }
-    return { ...publicMessage, images,videos };
+    return { ...publicMessage, images,videos,audios };
   }
   async read(id) {
     const source = this.entries.get(id);
@@ -115,6 +116,24 @@ export class ImageStore {
     }).finally(()=>this.thumbJobs.delete(key));
     this.thumbTail=job;this.thumbJobs.set(key,job);return job;
   }
+  async openAudio(id) {
+    const source=this.entries.get(id);
+    if(!source || source.kind!=='audio')throw new Error('音频链接已过期，请刷新会话');
+    let file;
+    try {
+      file=await open(await realpath(source.path),'r');const stat=await file.stat();
+      if(!stat.isFile()||!stat.size)throw new Error('音频文件无法读取');
+      const header=Buffer.alloc(16);await file.read(header,0,16,0);
+      const ext=extname(source.path).toLowerCase();let type;
+      if(ext==='.wav'&&header.toString('ascii',0,4)==='RIFF'&&header.toString('ascii',8,12)==='WAVE')type='audio/wav';
+      if(ext==='.mp3'&&(header.toString('ascii',0,3)==='ID3'||header[0]===255&&(header[1]&224)===224))type='audio/mpeg';
+      if(ext==='.m4a'&&header.toString('ascii',4,8)==='ftyp')type='audio/mp4';
+      if(ext==='.ogg'&&header.toString('ascii',0,4)==='OggS')type='audio/ogg';
+      if(ext==='.flac'&&header.toString('ascii',0,4)==='fLaC')type='audio/flac';
+      if(!type)throw new Error('音频格式不支持');
+      return {file,size:stat.size,type,name:basename(source.path)};
+    }catch(err){await file?.close();throw new Error(err.code?'原音频已删除或无法读取':err.message);}
+  }
   async openVideo(id) {
     const source=this.entries.get(id);
     if(!source || source.kind!=='video')throw new Error('视频链接已过期，请刷新会话');
@@ -133,11 +152,17 @@ export class ImageStore {
 }
 
 export async function serveVideo(req,res,store,id,{download=false}={}) {
+  return serveMedia(req,res,store,id,'video',download);
+}
+export async function serveAudio(req,res,store,id,{download=false}={}) {
+  return serveMedia(req,res,store,id,'audio',download);
+}
+async function serveMedia(req,res,store,id,kind,download) {
   if((store.activeStreams||0)>=4){res.writeHead(429,{'Retry-After':'2'});res.end();return;}
   store.activeStreams=(store.activeStreams||0)+1;
   let video;
   try {
-    video=await store.openVideo(id);
+    video=await (kind==='audio'?store.openAudio(id):store.openVideo(id));
     if(res.destroyed)return;
     const range=byteRange(req.headers.range,video.size);
     if(!range){res.writeHead(416,{'Content-Range':`bytes */${video.size}`,'Accept-Ranges':'bytes'});res.end();return;}

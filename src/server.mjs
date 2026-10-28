@@ -11,7 +11,7 @@ import { Catalog } from './catalog.mjs';
 import { Bridge } from './bridge.mjs';
 import { getModels, getSkills } from './models.mjs';
 import { PairStore } from './pair-store.mjs';
-import { ImageStore, serveVideo } from './attachments.mjs';
+import { ImageStore, serveVideo, serveAudio } from './attachments.mjs';
 import { ClaudeChannels, WorkBuddy } from './providers.mjs';
 import { DesktopOpener } from './desktop-open.mjs';
 import { getQuota } from './quota.mjs';
@@ -179,7 +179,7 @@ async function handler(req, res) {
   if (!['GET','HEAD'].includes(req.method) && req.headers['x-csrf-token'] !== s.csrf) return json(res, 403, { error: '会话校验失败，请刷新页面' });
   if (req.method === 'GET' && path === '/api/status') return json(res, 200, {
     csrf: s.csrf, connected: !!ipc.clientId, computer: hostname(), authMode, remembered: !!s.remembered, transport: tls ? 'https' : 'lan-http',
-    features: { live: true, send: true, stop: true, approvals: true, userInput: true, images: true, videos: true, uploads:true, fork:true, skills: true, references: true, openDesktop: desktopOpener.enabled, create: false },
+    features: { live: true, send: true, stop: true, approvals: true, userInput: true, images: true, videos: true, audios: true, uploads:true, fork:true, skills: true, references: true, openDesktop: desktopOpener.enabled, create: false },
   });
   if (req.method === 'GET' && path === '/api/quota') {
     if (process.env.REMOTE_CODING_DISABLE_ACCOUNT_QUOTA === '1') return json(res, 503, { error: '测试环境未启用账号额度读取' });
@@ -275,8 +275,8 @@ async function handler(req, res) {
       return res.end(image.bytes);
     } catch (err) { return json(res, 404, { error: err.message }); }
   }
-  if (['GET','HEAD'].includes(req.method) && /^\/api\/videos\/[0-9a-f]{64}$/.test(path)) {
-    try { await serveVideo(req,res,images,path.split('/').at(-1),{download:url.searchParams.get('download')==='1'}); }
+  if (['GET','HEAD'].includes(req.method) && /^\/api\/(videos|audios)\/[0-9a-f]{64}$/.test(path)) {
+    try { await (path.startsWith('/api/audios/')?serveAudio:serveVideo)(req,res,images,path.split('/').at(-1),{download:url.searchParams.get('download')==='1'}); }
     catch(err){if(res.headersSent)res.destroy();else return json(res,404,{error:err.message});}
     return;
   }

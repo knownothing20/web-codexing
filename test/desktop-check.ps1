@@ -24,6 +24,32 @@ try {
     } finally { $bitmap.Dispose() }
 } finally { $icon.Dispose() }
 $assembly = [Reflection.Assembly]::LoadFile($executable)
+# Exercise the exact startup implementation against an isolated HKCU test key.
+# Never change this computer's real login startup preference during automated tests.
+$startup = $assembly.GetType('StartupSetting', $true)
+$flags = [Reflection.BindingFlags]'Static,NonPublic'
+$readStartup = $startup.GetMethod('Read', $flags)
+$writeStartup = $startup.GetMethod('Write', $flags)
+$testKeyPath = 'Software\RemoteCoding\Tests\' + [Guid]::NewGuid().ToString('N')
+$testKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($testKeyPath)
+try {
+    $testKey.SetValue('Unrelated', 'keep')
+    if ($readStartup.Invoke($null, @($testKey, $executable.PSObject.BaseObject))) { throw 'Startup unexpectedly enabled.' }
+    $writeStartup.Invoke($null, @($testKey, $executable.PSObject.BaseObject, $true))
+    if (-not $readStartup.Invoke($null, @($testKey, $executable.PSObject.BaseObject))) { throw 'Startup enable failed.' }
+    if ($testKey.GetValue('RemoteCoding') -ne ('"' + $executable + '" --background')) { throw 'Startup executable is not quoted or quiet.' }
+    $testKey.Close()
+    $testKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($testKeyPath, $true)
+    if (-not $readStartup.Invoke($null, @($testKey, $executable.PSObject.BaseObject))) { throw 'Startup did not persist.' }
+    if ($readStartup.Invoke($null, @($testKey, [IO.Path]::Combine($TestRoot, 'other.exe')))) { throw 'Different executable treated as enabled.' }
+    $writeStartup.Invoke($null, @($testKey, $executable.PSObject.BaseObject, $false))
+    $writeStartup.Invoke($null, @($testKey, $executable.PSObject.BaseObject, $false))
+    if ($readStartup.Invoke($null, @($testKey, $executable.PSObject.BaseObject))) { throw 'Startup disable failed.' }
+    if ($testKey.GetValue('Unrelated') -ne 'keep') { throw 'Unrelated startup item changed.' }
+} finally {
+    $testKey.Dispose()
+    [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree($testKeyPath, $false)
+}
 $stream = $assembly.GetManifestResourceStream('RemoteCoding.Icon')
 try {
     if ($null -eq $stream) { throw 'Missing window/tray icon resource.' }
@@ -86,4 +112,4 @@ try {
     $missing = Join-Path $TestRoot 'missing'
     if ((Run-Shortcut $missing) -eq 0 -or (Test-Path -LiteralPath $missing)) { throw 'Missing directory was not handled safely.' }
 } finally { [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null }
-Write-Output 'Desktop checks passed: native EXE icon, embedded tray icon, shortcut target/icon/working directory, Unicode paths, repeat update, conflict preservation, missing directory.'
+Write-Output 'Desktop checks passed: startup enable/disable/persistence/quoted background command; native EXE icon, embedded tray icon, shortcut target/icon/working directory, Unicode paths, repeat update, conflict preservation, missing directory.'

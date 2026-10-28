@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
-test('Windows launcher embeds a shell icon and creates safe, working desktop shortcuts', { skip:process.platform !== 'win32', timeout:60000 }, () => {
+test('Windows launcher supports persistent startup settings, native icons and safe desktop shortcuts', { skip:process.platform !== 'win32', timeout:60000 }, () => {
   const root = fileURLToPath(new URL('..', import.meta.url));
   // Windows CI exposes an 8.3 temp alias; COM returns canonical long paths.
   const scratch = realpathSync.native(mkdtempSync(join(tmpdir(), 'remote-coding-desktop-')));

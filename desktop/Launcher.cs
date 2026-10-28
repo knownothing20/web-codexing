@@ -10,6 +10,7 @@ using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 internal static class Program
 {
@@ -22,19 +23,45 @@ internal static class Program
             try { DesktopShortcut.Create(args.Length > 1 ? args[1] : null); return 0; }
             catch (Exception e) { Console.Error.WriteLine("Shortcut creation failed: " + e.GetBaseException().Message); return 1; }
         }
+        bool background = Array.IndexOf(args, "--background") >= 0;
         bool created;
         using (var mutex = new Mutex(true, @"Local\LeonRemoteCodingPrototype", out created))
         {
-            if (!created) { Signal("Show"); return 0; }
+            if (!created) { if (!background) Signal("Show"); return 0; }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new ControlPanel());
+            Application.Run(new ControlPanel(background));
         }
         return 0;
     }
     private static void Signal(string name)
     {
         try { using (var e = EventWaitHandle.OpenExisting(@"Local\LeonRemoteCoding" + name)) e.Set(); } catch { }
+    }
+}
+
+internal static class StartupSetting
+{
+    internal const string RunPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    internal const string ValueName = "RemoteCoding";
+    internal static string Command(string executable) { return "\"" + executable + "\" --background"; }
+    internal static bool Read(RegistryKey key, string executable)
+    {
+        return key != null && String.Equals(key.GetValue(ValueName) as string, Command(executable), StringComparison.OrdinalIgnoreCase);
+    }
+    internal static void Write(RegistryKey key, string executable, bool enabled)
+    {
+        if (enabled) key.SetValue(ValueName, Command(executable), RegistryValueKind.String);
+        else key.DeleteValue(ValueName, false);
+        if (Read(key, executable) != enabled) throw new IOException("开机自启设置未保存，请重试。");
+    }
+    internal static bool Enabled()
+    {
+        using (var key = Registry.CurrentUser.OpenSubKey(RunPath)) return Read(key, Application.ExecutablePath);
+    }
+    internal static void SetEnabled(bool enabled)
+    {
+        using (var key = Registry.CurrentUser.CreateSubKey(RunPath)) Write(key, Application.ExecutablePath, enabled);
     }
 }
 
@@ -121,6 +148,7 @@ internal sealed class ControlPanel : Form
     private Process bridge;
     private Dictionary<string, object> runtime;
     private bool exiting;
+    private bool startHidden;
     private int waiting;
     private Icon customIcon;
     private readonly EventWaitHandle showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\LeonRemoteCodingShow");
@@ -128,8 +156,9 @@ internal sealed class ControlPanel : Form
     private RegisteredWaitHandle showWait;
     private RegisteredWaitHandle stopWait;
 
-    public ControlPanel()
+    public ControlPanel(bool background = false)
     {
+        startHidden = background;
         Text = "Remote Coding · 手机连接";
         ClientSize = new Size(460, 660);
         StartPosition = FormStartPosition.CenterScreen;
@@ -165,6 +194,17 @@ internal sealed class ControlPanel : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add("显示连接面板", null, delegate { ShowPanel(); });
         menu.Items.Add("创建桌面快捷方式", null, delegate { CreateDesktopShortcut(); });
+        var startup = new ToolStripMenuItem("开机自启");
+        Action readStartup = delegate {
+            try { startup.Checked = StartupSetting.Enabled(); startup.Enabled = true; }
+            catch { startup.Checked = false; startup.Enabled = false; }
+        };
+        startup.Click += delegate {
+            try { StartupSetting.SetEnabled(!StartupSetting.Enabled()); Log("Startup setting changed."); }
+            catch (Exception e) { MessageBox.Show(e.GetBaseException().Message, "开机自启设置失败", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+            readStartup();
+        };
+        menu.Items.Add(startup); menu.Opening += delegate { readStartup(); }; readStartup();
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出 Remote Coding", null, delegate { ExitApp(); });
         tray.Icon = customIcon; tray.Text = "Remote Coding · 正在启动"; tray.ContextMenuStrip = menu; tray.Visible = true;
@@ -174,7 +214,9 @@ internal sealed class ControlPanel : Form
         showWait = ThreadPool.RegisterWaitForSingleObject(showEvent, delegate { if (IsHandleCreated) BeginInvoke(new Action(ShowPanel)); }, null, -1, false);
         stopWait = ThreadPool.RegisterWaitForSingleObject(stopEvent, delegate { if (IsHandleCreated) BeginInvoke(new Action(ExitApp)); }, null, -1, false);
         timer.Interval = 1500; timer.Tick += delegate { UpdateStatus(); }; timer.Start();
+        if (background) { CreateHandle(); BeginInvoke(new Action(StartBridge)); }
     }
+    protected override void SetVisibleCore(bool value) { base.SetVisibleCore(value && !startHidden); }
     private static Icon CreateIcon()
     {
         using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("RemoteCoding.Icon"))
@@ -191,6 +233,7 @@ internal sealed class ControlPanel : Form
     }
     private void StartBridge()
     {
+        if (bridge != null) return;
         try
         {
             Directory.CreateDirectory(Path.Combine(root, ".local"));
@@ -284,7 +327,7 @@ internal sealed class ControlPanel : Form
         }
         catch (Exception e) { error.Text = "二维码加载失败，可手动输入地址与配对码。"; Log(e.Message); }
     }
-    private void ShowPanel() { Show(); WindowState = FormWindowState.Normal; Activate(); }
+    private void ShowPanel() { startHidden = false; Show(); WindowState = FormWindowState.Normal; Activate(); }
     private void ExitApp()
     {
         if (exiting) return; exiting = true; timer.Stop();

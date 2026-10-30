@@ -25,7 +25,7 @@ const questions = [{ id:'demo-request', method:'item/tool/requestUserInput', que
   {label:'图片预览',description:'查看缩略图和原图'},
 ]}] }];
 
-export function createDemoServer() {
+export function createDemoServer({credits=false}={}) {
   const streams = new Set();
   const activeThreads = new Map();
   const demoThreads = structuredClone(threads);
@@ -50,7 +50,7 @@ export function createDemoServer() {
     if(req.method==='POST') { res.writeHead(409,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'演示模式：不会提交真实任务或设置。'}));return; }
     if(url.pathname==='/api/status') return json({csrf:'demo-only',computer:'演示电脑 · DEMO',connected:true,features:{openDesktop:false}});
     if(url.pathname==='/api/providers') return json({providers:[{id:'codex',name:'Codex',connected:true}]});
-    if(url.pathname==='/api/quota') return json({buckets:[{name:'演示额度',plan:null,windows:[{kind:'primary',minutes:300,remaining:80,resetsAt:now+7200000}]}],updatedAt:now,stale:false});
+    if(url.pathname==='/api/quota') return json({buckets:[{name:'演示额度',plan:null,credits:credits?{hasCredits:true,unlimited:false,balance:12345.67}:null,windows:[{kind:'primary',minutes:credits?10080:300,remaining:credits?0:80,resetsAt:now+7200000}]}],updatedAt:now,stale:false});
     if(url.pathname==='/api/threads') return json({threads:demoThreads.filter(t=>t.title.includes(url.searchParams.get('q')||'')),next:null});
     if(url.pathname==='/api/models') return json({models:[{id:'Codex · Demo',description:'仅演示界面，不代表真实模型可用性',efforts:['low','medium','high'],defaultEffort:'high',serviceTiers:[{id:'priority',name:'Fast'}],defaultServiceTier:null}]});
     const match = /^\/api\/threads\/(demo-chat|demo-question|demo-complete)\/(history|events|skills)$/.exec(url.pathname);
@@ -76,7 +76,7 @@ export function createDemoServer() {
   return server;
 }
 if(process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)) {
-  const server=createDemoServer();
+  const server=createDemoServer({credits:process.argv.includes('--credits')});
   server.listen(35550,'127.0.0.1',()=>console.log('Public demo only: http://127.0.0.1:35550/ — no Codex, no account access. Ctrl+C to stop.'));
   process.on('SIGINT',()=>server.stopDemo().then(()=>process.exit(0)));
 }

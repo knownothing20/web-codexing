@@ -251,10 +251,23 @@ function quotaWindowName(window) {
   if (minutes && minutes % 60 === 0) return `${minutes / 60} 小时额度`;
   return minutes ? `${minutes} 分钟额度` : window.kind === 'primary' ? '主额度' : '次额度';
 }
+function creditsLabel(credits, compact=false) {
+  if(credits?.unlimited===true)return '不限量';
+  if(typeof credits?.balance==='number')return new Intl.NumberFormat('zh-CN',{notation:compact&&credits.balance>=10000?'compact':'standard',maximumFractionDigits:2}).format(credits.balance);
+  return credits?.hasCredits===true?'可用':credits?.hasCredits===false?'不可用':'未提供';
+}
 function renderHeaderQuota(data) {
   const badge=$('header-quota'),bucket=data?.buckets?.find(b=>b.name==='Codex')||data?.buckets?.[0];
   const windows=bucket?.windows||[],window=windows.find(w=>w.minutes===10080)||windows.find(w=>w.kind==='primary')||windows[0];
   const known=typeof window?.remaining==='number'&&Number.isFinite(window.remaining);
+  const credits=bucket?.credits;
+  if((!known||windows.some(w=>typeof w.remaining==='number'&&w.remaining<=0))&&credits&&(typeof credits.balance==='number'||credits.hasCredits===true||credits.unlimited===true)) {
+    badge.querySelector('small').textContent=data?.stale?'积分·上次':'积分剩余';
+    badge.querySelector('strong').textContent=creditsLabel(credits,true);
+    badge.classList.toggle('low',credits.balance===0&&credits.unlimited!==true);badge.classList.toggle('stale',!!data?.stale);
+    badge.title=`${data?.stale?'上次读取的':'账户'}积分：${creditsLabel(credits)} · 点击查看额度和积分详情`;
+    badge.setAttribute('aria-label',badge.title);return;
+  }
   badge.querySelector('small').textContent=(window?quotaWindowName(window).replace('额度',''):'额度')+(data?.stale?'·上次':'剩余');
   badge.querySelector('strong').textContent=known?new Intl.NumberFormat('zh-CN',{maximumFractionDigits:1}).format(window.remaining)+'%':'—';
   badge.classList.toggle('low',known&&window.remaining<20);badge.classList.toggle('stale',!!data?.stale);
@@ -279,6 +292,14 @@ function renderQuota(data) {
     row.append(reset); container.append(row);
   }
   if (!container.childElementCount) { const note = document.createElement('small'); note.textContent = '此账号暂未提供额度数据'; container.append(note); }
+  for(const bucket of data.buckets||[])if(bucket.credits){
+    const row=document.createElement('div');row.className='quota-window quota-credits';
+    const title=document.createElement('div');title.className='quota-window-title';
+    const label=document.createElement('span'),balance=document.createElement('strong');
+    label.textContent=(data.buckets.length>1?bucket.name+' · ':'')+(data.stale?'积分余额（上次）':'积分余额');balance.textContent=creditsLabel(bucket.credits);
+    const note=document.createElement('small');note.textContent='账户余额';note.title='账户积分余额，不代表本条消息的扣费';
+    title.append(label,balance);row.append(title,note);container.append(row);
+  }
   const plan = data.buckets?.find(b => b.plan)?.plan;
   $('quota-plan').textContent = plan ? plan.toUpperCase() : '';
   $('quota-updated').textContent = (data.stale ? '更新失败 · 上次读取 ' : '更新 ') + new Date(data.updatedAt).toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',hour12:false});

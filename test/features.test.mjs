@@ -46,6 +46,16 @@ test('quota reads are coalesced and cached; failed refresh preserves timestamp a
   const first=await fresh();assert.equal(first.buckets[0].windows[0].remaining,100);await fresh();assert.equal(calls,3);
 });
 
+test('credits expose only validated balance and availability, separately from earned resets',()=>{
+  const source={hasCredits:true,unlimited:false,balance:'1234.5678000000',accountId:'private-account',creditId:'private-credit'};
+  const view=quotaView({rateLimits:{credits:source},rateLimitsByLimitId:{codex:{primary:{usedPercent:100}}},rateLimitResetCredits:{availableCount:9}});
+  assert.deepEqual(view.buckets[0].credits,{hasCredits:true,unlimited:false,balance:1234.5678});
+  assert.equal(view.buckets[0].windows[0].remaining,0);assert.equal(JSON.stringify(view).includes('private-'),false);
+  for(const balance of ['',null,'Infinity','<script>',-1,Infinity,'1e999'])assert.equal(quotaView({rateLimits:{credits:{balance}}}).buckets[0].credits.balance,null);
+  assert.equal(quotaView({rateLimits:{credits:{hasCredits:false,balance:'0'}}}).buckets[0].credits.balance,0);
+  assert.equal(quotaView({rateLimits:{}}).buckets[0].credits,null);
+});
+
 test('desktop open accepts only a conversation UUID, opens a fixed URI without a prompt, and coalesces double clicks', async () => {
   const calls = [], opener = new DesktopOpener({ enabled: true, open: async (...args) => { calls.push(args); } });
   const id = randomUUID();

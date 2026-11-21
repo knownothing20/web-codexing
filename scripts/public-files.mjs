@@ -5,7 +5,7 @@ import { join } from 'node:path';
 export const publicDirectories = new Set(['src', 'public', 'desktop', 'integrations', 'scripts', 'test', 'docs', '.github']);
 export const publicRootFiles = new Set([
   '.gitignore', '.gitattributes', 'README.md', 'LICENSE', 'SECURITY.md', 'CONTRIBUTING.md',
-  'package.json', 'package-lock.json', 'build.ps1', 'start.cmd', 'RELEASE-MANIFEST.json',
+  'package.json', 'package-lock.json', 'build.ps1', 'start.cmd', 'start-shared.cmd', 'RELEASE-MANIFEST.json',
 ]);
 export const localDirectories = new Set([
   '.git', '.local', '.codex', '.claude', '.idea', '.vscode', 'node_modules', 'dist',

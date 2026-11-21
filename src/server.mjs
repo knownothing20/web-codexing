@@ -7,6 +7,7 @@ import { networkInterfaces, hostname } from 'node:os';
 import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import QRCode from 'qrcode';
 import { DesktopIpc } from './ipc.mjs';
+import { AppServerIpc } from './app-server-ipc.mjs';
 import { Catalog } from './catalog.mjs';
 import { Bridge } from './bridge.mjs';
 import { getModels, getSkills } from './models.mjs';
@@ -25,7 +26,11 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const runtimeDir = process.env.REMOTE_CODING_RUNTIME_DIR || join(root, '.local');
 mkdirSync(runtimeDir, { recursive: true });
 const catalog = new Catalog();
-const ipc = new DesktopIpc({ pipe: process.env.REMOTE_CODING_IPC_PIPE || '\\\\.\\pipe\\codex-ipc' });
+const appServerUrl = process.env.REMOTE_CODING_APP_SERVER_URL;
+const tokenPath = process.env.REMOTE_CODING_APP_SERVER_TOKEN_FILE;
+const ipc = appServerUrl ? new AppServerIpc({ url: appServerUrl,
+  token: tokenPath ? readFileSync(tokenPath, 'utf8').trim() : undefined })
+  : new DesktopIpc({ pipe: process.env.REMOTE_CODING_IPC_PIPE || '\\\\.\\pipe\\codex-ipc' });
 const images = new ImageStore();
 const uploads = new UploadStore(runtimeDir), forks = new ForkService(runtimeDir);
 let uploadReaders = 0;

@@ -1,6 +1,6 @@
 {
   "name": "web-codexing",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Control your computer's Codex desktop chats from a lightweight web UI over LAN or your own Tailscale network.",

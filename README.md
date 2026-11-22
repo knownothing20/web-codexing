@@ -156,9 +156,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 ### 新版 Windows 客户端的共享连接
 
-如果 Codex 已打开但面板一直显示“等待电脑上的 Codex 打开”，客户端可能已停用旧版 IPC。可以尝试新版共享连接：等运行中的会话结束，完整退出电脑上的 Codex 和 Remote Coding 托盘，再双击 `start-shared.cmd`。这个入口启动一个仅监听本机的 Codex App Server，桌面客户端和托盘会尝试连接同一进程。保持启动窗口打开，在桌面打开原会话后刷新手机网页。
+新版 `RemoteCoding.exe` 会在手动启动时检查当前 Windows Codex。如果新版 Codex 正在运行且没有使用共享连接，等会话结束后，完整退出 Codex 和 Remote Coding 托盘，再双击 `RemoteCoding.exe`。它会打开 Codex 并启动仅监听本机的共享 App Server。打开原会话后刷新手机网页。现有 `start.cmd` 和 `start-shared.cmd` 都能启动同一个 EXE。
 
-共享模式保留原会话 ID。已用新版 CLI 的两个连接验证历史、发送和实时回复；Windows 打包客户端是否采用该连接须以桌面打开会话后网页可以操作为准。如果仍提示会话未加载，确认桌面通过这个入口启动。退出桌面和托盘后可以用 `start.cmd` 回到旧版 IPC 模式。
+共享模式保留原会话 ID。已用新版 CLI 的两个连接验证历史、发送和实时回复，Windows 桌面是否已接上以网页中的原会话可以操作为准。开机自启不会自动打开 Codex 窗口。如果需要手动切回旧版 IPC，先退出托盘，再运行 `RemoteCoding.exe --legacy`。
 
 已有共享 App Server 时，可以只给 Remote Coding 的启动进程设置 `REMOTE_CODING_APP_SERVER_URL`。地址限 `ws://127.0.0.1:<端口>` 或 IPv6 回环。若服务配置了 Bearer 验证，把 `REMOTE_CODING_APP_SERVER_TOKEN_FILE` 指向本地令牌文件。这两个设置不需要写进项目或发布包。不要把 App Server 监听端口暴露到局域网，手机继续使用 Remote Coding 的网页地址。
 

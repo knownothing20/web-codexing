@@ -1,68 +1,98 @@
-﻿param([ValidateRange(1024, 65535)][int]$AppServerPort = 3211)
+param([Parameter(Mandatory=$true)][int]$LauncherPid, [switch]$ReuseOnly)
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $root = Split-Path -Parent $PSScriptRoot
-$package = Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1
-if (!$package) { throw '找不到 Windows 版 Codex 客户端。' }
-$desktopExe = Join-Path $package.InstallLocation 'app\ChatGPT.exe'
-$codexExe = Join-Path $package.InstallLocation 'app\resources\codex.exe'
+$runtimePath = Join-Path $root '.local/shared-host.json'
 $trayExe = Join-Path $root 'RemoteCoding.exe'
-foreach ($exe in @($desktopExe, $codexExe, $trayExe)) {
-    if (!(Test-Path -LiteralPath $exe -PathType Leaf)) { throw "找不到启动文件：$exe" }
+$owner = $null
+$signalSent = $false
+
+function Answer([string]$Value) {
+    [Console]::WriteLine($Value)
+    [Console]::Out.Flush()
+    $script:signalSent = $true
 }
 
-if (Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $desktopExe }) {
-    throw '请等当前任务结束，完整退出电脑上的 Codex，再打开这个启动入口。'
-}
-if (Get-Process -Name RemoteCoding -ErrorAction SilentlyContinue) {
-    throw '请在托盘菜单选择“退出 Remote Coding”，然后重新打开这个启动入口。'
-}
-if ($env:CODEX_APP_SERVER_FORCE_CLI -eq '1') {
-    throw '当前 Codex 设置固定使用内置 CLI。请在未设置 CODEX_APP_SERVER_FORCE_CLI 的环境中使用共享入口。'
+function DesktopRunning {
+    Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -eq $desktopExe -or $_.Path -like '*\WindowsApps\OpenAI.Codex_*\app\ChatGPT.exe'
+    }
 }
 
-$endpoint = "ws://127.0.0.1:$AppServerPort"
-$listener = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, $AppServerPort)
-try { $listener.Start() } finally { $listener.Stop() }
+function StartDesktop([string]$Endpoint) {
+    if (!(Get-Process -Id $LauncherPid -ErrorAction SilentlyContinue)) { throw 'Launcher exited' }
+    if (DesktopRunning) { throw 'Desktop started separately' }
+    $previous = $env:CODEX_APP_SERVER_WS_URL
+    try {
+        $env:CODEX_APP_SERVER_WS_URL = $Endpoint
+        Start-Process -FilePath $desktopExe -WorkingDirectory (Split-Path -Parent $desktopExe)
+    } finally { $env:CODEX_APP_SERVER_WS_URL = $previous }
+}
 
-$owner = Start-Process -FilePath $codexExe -ArgumentList @('app-server', '--listen', $endpoint) -WorkingDirectory $root -WindowStyle Hidden -PassThru
+function OwnedListener([int]$Port, [int]$ProcessId) {
+    @(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -OwningProcess $ProcessId -State Listen -ErrorAction SilentlyContinue).Count -gt 0
+}
+
 try {
+    $package = Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1
+    if (!$package -or [version]$package.Version -lt [version]'26.1117.3838.0') { Answer 'legacy'; return }
+    $desktopExe = Join-Path $package.InstallLocation 'app/ChatGPT.exe'
+    $codexExe = Join-Path $package.InstallLocation 'app/resources/codex.exe'
+    if (!(Test-Path -LiteralPath $desktopExe -PathType Leaf) -or !(Test-Path -LiteralPath $codexExe -PathType Leaf)) { Answer 'legacy'; return }
+    if ($env:CODEX_APP_SERVER_FORCE_CLI -eq '1') { Answer 'legacy'; return }
+
+    $saved = $null
+    try {
+        $candidate = Get-Content -Raw -LiteralPath $runtimePath | ConvertFrom-Json
+        $existing = Get-Process -Id ([int]$candidate.pid) -ErrorAction Stop
+        if ($existing.Path -eq $codexExe -and $existing.StartTime.ToFileTimeUtc().ToString() -eq $candidate.started -and
+            $candidate.port -ge 1024 -and $candidate.port -le 65535 -and (OwnedListener $candidate.port $existing.Id)) { $saved = $candidate }
+    } catch { }
+    if ($saved) {
+        $endpoint = "ws://127.0.0.1:$($saved.port)"
+        if (!$ReuseOnly -and !(DesktopRunning)) { StartDesktop $endpoint }
+        Answer $endpoint
+        return
+    }
+    if (DesktopRunning) { Answer 'desktop-running'; return }
+    if ($ReuseOnly) { Answer 'legacy'; return }
+
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    try { $listener.Start(); $port = $listener.LocalEndpoint.Port } finally { $listener.Stop() }
+    $endpoint = "ws://127.0.0.1:$port"
+    $owner = Start-Process -FilePath $codexExe -ArgumentList @('app-server', '--listen', $endpoint) -WorkingDirectory $root -WindowStyle Hidden -PassThru
     $ready = $false
     for ($attempt = 0; $attempt -lt 40 -and !$owner.HasExited; $attempt++) {
         try {
-            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$AppServerPort/readyz" -TimeoutSec 1
-            if ($response.StatusCode -eq 200) { $ready = $true; break }
-        } catch { Start-Sleep -Milliseconds 250 }
+            $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$port/readyz" -TimeoutSec 1
+            if ($response.StatusCode -eq 200 -and (OwnedListener $port $owner.Id)) { $ready = $true; break }
+        } catch { }
+        Start-Sleep -Milliseconds 250
     }
-    if (!$ready -or $owner.HasExited) { throw '共享 App Server 启动失败，请检查本机端口和 Codex 版本。' }
+    if (!$ready -or $owner.HasExited) { throw 'Shared App Server did not become ready' }
+    @{
+        pid = $owner.Id
+        started = $owner.StartTime.ToFileTimeUtc().ToString()
+        port = $port
+    } | ConvertTo-Json -Compress | Set-Content -LiteralPath $runtimePath -Encoding ASCII
+    StartDesktop $endpoint
+    Answer $endpoint
 
-    $previousDesktop = $env:CODEX_APP_SERVER_WS_URL
-    try {
-        $env:CODEX_APP_SERVER_WS_URL = $endpoint
-        Start-Process -FilePath $desktopExe -WorkingDirectory (Split-Path -Parent $desktopExe)
-    } finally { $env:CODEX_APP_SERVER_WS_URL = $previousDesktop }
-
-    $previousWeb = $env:REMOTE_CODING_APP_SERVER_URL
-    $previousTokenFile = $env:REMOTE_CODING_APP_SERVER_TOKEN_FILE
-    try {
-        $env:REMOTE_CODING_APP_SERVER_URL = $endpoint
-        $env:REMOTE_CODING_APP_SERVER_TOKEN_FILE = $null
-        Start-Process -FilePath $trayExe -WorkingDirectory $root -ArgumentList '--background' -WindowStyle Hidden
-    } finally {
-        $env:REMOTE_CODING_APP_SERVER_URL = $previousWeb
-        $env:REMOTE_CODING_APP_SERVER_TOKEN_FILE = $previousTokenFile
-    }
-
-    Write-Host '共享 App Server 已启动。请在电脑 Codex 打开要继续的会话，然后刷新手机网页。'
-    Write-Host '退出桌面和托盘后，此窗口会自动关闭共享 App Server。'
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 4
     while (!$owner.HasExited) {
-        $desktopRunning = Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $desktopExe }
         $bridgeRunning = Get-Process -Name RemoteCoding -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $trayExe }
-        if (!$desktopRunning -and !$bridgeRunning) { break }
+        if (!(DesktopRunning) -and !$bridgeRunning) { break }
         Start-Sleep -Seconds 3
     }
+} catch {
+    if (!$signalSent) {
+        [Console]::Error.WriteLine($_.Exception.Message)
+        Answer 'failed'
+    }
 } finally {
-    if (!$owner.HasExited) { $owner.Kill() }
-    $owner.Dispose()
+    if ($owner) {
+        if (!$owner.HasExited) { $owner.Kill() }
+        $owner.Dispose()
+    }
 }

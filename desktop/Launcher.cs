@@ -12,6 +12,10 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
+[assembly: AssemblyTitle("Remote Coding")]
+[assembly: AssemblyFileVersion("0.1.1.0")]
+[assembly: AssemblyVersion("0.1.1.0")]
+
 internal static class Program
 {
     [STAThread]
@@ -30,7 +34,7 @@ internal static class Program
             if (!created) { if (!background) Signal("Show"); return 0; }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new ControlPanel(background));
+            Application.Run(new ControlPanel(background, Array.IndexOf(args, "--legacy") >= 0));
         }
         return 0;
     }
@@ -145,6 +149,11 @@ internal sealed class ControlPanel : Form
     private readonly Label error = new Label();
     private readonly CheckBox lanMode = new CheckBox();
     private bool updatingMode;
+    private readonly bool startedInBackground;
+    private readonly bool legacyMode;
+    private bool starting;
+    private bool sharedMode;
+    private string sharedHint;
     private Process bridge;
     private Dictionary<string, object> runtime;
     private bool exiting;
@@ -156,8 +165,10 @@ internal sealed class ControlPanel : Form
     private RegisteredWaitHandle showWait;
     private RegisteredWaitHandle stopWait;
 
-    public ControlPanel(bool background = false)
+    public ControlPanel(bool background = false, bool legacy = false)
     {
+        startedInBackground = background;
+        legacyMode = legacy;
         startHidden = background;
         Text = "Remote Coding · 手机连接";
         ClientSize = new Size(460, 660);
@@ -233,13 +244,72 @@ internal sealed class ControlPanel : Form
     }
     private void StartBridge()
     {
-        if (bridge != null) return;
+        if (starting || bridge != null) return;
+        starting = true;
+        var configuredEndpoint = Environment.GetEnvironmentVariable("REMOTE_CODING_APP_SERVER_URL");
+        if (legacyMode || !String.IsNullOrEmpty(configuredEndpoint))
+        {
+            LaunchBridge(legacyMode ? null : configuredEndpoint, !legacyMode);
+            return;
+        }
+        status.Text = "正在检查 Codex 连接…";
+        ThreadPool.QueueUserWorkItem(delegate {
+            var result = CheckSharedHost();
+            try { BeginInvoke(new Action(delegate { ApplySharedHost(result); })); }
+            catch (InvalidOperationException) { }
+        });
+    }
+    private string CheckSharedHost()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, ".local"));
+            var shell = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
+            var script = Path.Combine(root, "scripts", "start-shared.ps1");
+            if (!File.Exists(script)) return "legacy";
+            var args = "-NoProfile -NonInteractive -File \"" + script + "\" -LauncherPid " + Process.GetCurrentProcess().Id;
+            if (startedInBackground && startHidden) args += " -ReuseOnly";
+            var start = new ProcessStartInfo(shell, args) { WorkingDirectory = root, UseShellExecute = false,
+                CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            using (var helper = new Process { StartInfo = start })
+            {
+                helper.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { Log(e.Data); };
+                helper.Start();
+                helper.BeginErrorReadLine();
+                // The helper returns one line, then keeps its server alive while
+                // either app still needs it. Disposing here releases our handles.
+                return helper.StandardOutput.ReadLine() ?? "failed";
+            }
+        }
+        catch (Exception e) { Log(e.Message); return "failed"; }
+    }
+    private void ApplySharedHost(string result)
+    {
+        if (exiting) return;
+        Uri endpoint;
+        if (Uri.TryCreate(result, UriKind.Absolute, out endpoint) && endpoint.Scheme == "ws" &&
+            endpoint.Host == "127.0.0.1" && endpoint.Port >= 1024 && endpoint.AbsolutePath == "/" &&
+            endpoint.UserInfo.Length == 0 && endpoint.Query.Length == 0 && endpoint.Fragment.Length == 0)
+        {
+            LaunchBridge(endpoint.AbsoluteUri, false);
+            return;
+        }
+        if (result == "desktop-running") sharedHint = "若连接不上，请完整退出 Codex 和本托盘，再双击 Remote Coding。";
+        if (result == "failed") sharedHint = "新版连接启动失败。退出本托盘后重试，可检查 .local\\launcher.log。";
+        LaunchBridge(null, false);
+    }
+    private void LaunchBridge(string sharedEndpoint, bool keepConfiguredToken)
+    {
         try
         {
             Directory.CreateDirectory(Path.Combine(root, ".local"));
             var start = new ProcessStartInfo("node.exe", "--disable-warning=ExperimentalWarning \"" + Path.Combine(root, "src", "server.mjs") + "\"");
             start.WorkingDirectory = root; start.UseShellExecute = false; start.CreateNoWindow = true;
             start.RedirectStandardOutput = true; start.RedirectStandardError = true;
+            sharedMode = !String.IsNullOrEmpty(sharedEndpoint);
+            if (sharedMode) start.EnvironmentVariables["REMOTE_CODING_APP_SERVER_URL"] = sharedEndpoint;
+            else start.EnvironmentVariables.Remove("REMOTE_CODING_APP_SERVER_URL");
+            if (!keepConfiguredToken) start.EnvironmentVariables.Remove("REMOTE_CODING_APP_SERVER_TOKEN_FILE");
             bridge = new Process(); bridge.StartInfo = start;
             bridge.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { Log(e.Data); };
             bridge.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { Log(e.Data); };
@@ -247,6 +317,7 @@ internal sealed class ControlPanel : Form
         }
         catch (Exception e)
         {
+            if (bridge != null) { bridge.Dispose(); bridge = null; }
             status.Text = "桥接服务未能启动"; error.Text = "需要安装 Node.js 24 或更新版本。"; Log(e.Message);
             MessageBox.Show("启动失败：" + e.Message + "\n\n请安装 Node.js 24 或更新版本，再运行程序。", "Remote Coding");
         }
@@ -283,14 +354,16 @@ internal sealed class ControlPanel : Form
             {
                 var data = json.Deserialize<Dictionary<string, object>>(client.DownloadString(LocalUrl("/api/local/status")));
                 var connected = Convert.ToBoolean(data["connected"]);
-                status.Text = connected ? "● Codex 桌面已连接" : "○ 等待电脑上的 Codex 打开";
+                status.Text = connected ? (sharedMode ? "● 共享服务已连接 · 请在 Codex 打开原会话" : "● Codex 桌面已连接")
+                    : (sharedMode ? "○ 正在连接共享服务" : "○ 等待电脑上的 Codex 打开");
                 status.ForeColor = connected ? Color.FromArgb(66, 107, 81) : Color.FromArgb(157, 122, 54);
-                tray.Text = connected ? "Remote Coding · Codex 已连接" : "Remote Coding · 等待 Codex";
+                tray.Text = connected ? (sharedMode ? "Remote Coding · 共享服务已连接" : "Remote Coding · Codex 已连接") : "Remote Coding · 等待 Codex";
                 stats.Text = "桥接内存 " + data["memoryMb"] + " MB    在线 " + data["streams"] + "    已记住 " + data["remembered"] + " 台";
                 updatingMode = true; lanMode.Checked = data["authMode"].ToString() == "lan"; lanMode.Enabled = true; updatingMode = false;
                 pair.Text = lanMode.Checked ? "局域网免配对已开启" : "配对码  " + runtime["pairCode"].ToString();
+                if (!connected && sharedHint != null) error.Text = sharedHint;
+                else if (addresses.SelectedItem != null && addresses.SelectedItem.ToString().Contains("127.0.0.1")) error.Text = "未发现局域网地址，请连接 Wi-Fi 或网线后重启程序。";
             }
-            if (addresses.SelectedItem != null && addresses.SelectedItem.ToString().Contains("127.0.0.1")) error.Text = "未发现局域网地址，请连接 Wi-Fi 或网线后重启程序。";
         }
         catch (Exception e) { Log(e.Message); }
     }

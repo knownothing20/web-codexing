@@ -156,7 +156,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 
 ### 新版 Windows 客户端的共享连接
 
-新版 `RemoteCoding.exe` 会在手动启动时检查当前 Windows Codex。如果新版 Codex 正在运行且没有使用共享连接，等会话结束后，完整退出 Codex 和 Remote Coding 托盘，再双击 `RemoteCoding.exe`。它会打开 Codex 并启动仅监听本机的共享 App Server。打开原会话后刷新手机网页。现有 `start.cmd` 和 `start-shared.cmd` 都能启动同一个 EXE。
+新版 `RemoteCoding.exe` 会在手动打开面板时检查当前 Windows Codex。如果面板提示“等待 Codex 完整退出”，请等会话结束后完整退出 Codex，Remote Coding 会自动重新打开它，并启动仅监听本机的共享 App Server。打开原会话后刷新手机网页。现有 `start.cmd` 和 `start-shared.cmd` 都能启动同一个 EXE。
 
 共享模式保留原会话 ID。已用新版 CLI 的两个连接验证历史、发送和实时回复，Windows 桌面是否已接上以网页中的原会话可以操作为准。开机自启不会自动打开 Codex 窗口。如果需要手动切回旧版 IPC，先退出托盘，再运行 `RemoteCoding.exe --legacy`。
 

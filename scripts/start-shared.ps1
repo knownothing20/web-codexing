@@ -56,7 +56,7 @@ try {
         return
     }
     if (DesktopRunning) { Answer 'desktop-running'; return }
-    if ($ReuseOnly) { Answer 'legacy'; return }
+    if ($ReuseOnly) { Answer 'ready-to-start'; return }
 
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     try { $listener.Start(); $port = $listener.LocalEndpoint.Port } finally { $listener.Stop() }

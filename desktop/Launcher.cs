@@ -13,8 +13,8 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Remote Coding")]
-[assembly: AssemblyFileVersion("0.1.1.0")]
-[assembly: AssemblyVersion("0.1.1.0")]
+[assembly: AssemblyFileVersion("0.1.2.0")]
+[assembly: AssemblyVersion("0.1.2.0")]
 
 internal static class Program
 {
@@ -153,6 +153,8 @@ internal sealed class ControlPanel : Form
     private readonly bool legacyMode;
     private bool starting;
     private bool sharedMode;
+    private bool sharedRequested;
+    private bool awaitingDesktopExit;
     private string sharedHint;
     private Process bridge;
     private Dictionary<string, object> runtime;
@@ -169,6 +171,7 @@ internal sealed class ControlPanel : Form
     {
         startedInBackground = background;
         legacyMode = legacy;
+        sharedRequested = !background;
         startHidden = background;
         Text = "Remote Coding · 手机连接";
         ClientSize = new Size(460, 660);
@@ -245,21 +248,26 @@ internal sealed class ControlPanel : Form
     private void StartBridge()
     {
         if (starting || bridge != null) return;
-        starting = true;
         var configuredEndpoint = Environment.GetEnvironmentVariable("REMOTE_CODING_APP_SERVER_URL");
         if (legacyMode || !String.IsNullOrEmpty(configuredEndpoint))
         {
             LaunchBridge(legacyMode ? null : configuredEndpoint, !legacyMode);
             return;
         }
-        status.Text = "正在检查 Codex 连接…";
+        CheckSharedConnection(startedInBackground && !sharedRequested);
+    }
+    private void CheckSharedConnection(bool reuseOnly)
+    {
+        if (starting || exiting) return;
+        starting = true;
+        status.Text = bridge == null ? "正在检查 Codex 连接…" : "正在切换新版连接…";
         ThreadPool.QueueUserWorkItem(delegate {
-            var result = CheckSharedHost();
+            var result = CheckSharedHost(reuseOnly);
             try { BeginInvoke(new Action(delegate { ApplySharedHost(result); })); }
             catch (InvalidOperationException) { }
         });
     }
-    private string CheckSharedHost()
+    private string CheckSharedHost(bool reuseOnly)
     {
         try
         {
@@ -268,7 +276,7 @@ internal sealed class ControlPanel : Form
             var script = Path.Combine(root, "scripts", "start-shared.ps1");
             if (!File.Exists(script)) return "legacy";
             var args = "-NoProfile -NonInteractive -File \"" + script + "\" -LauncherPid " + Process.GetCurrentProcess().Id;
-            if (startedInBackground && startHidden) args += " -ReuseOnly";
+            if (reuseOnly) args += " -ReuseOnly";
             var start = new ProcessStartInfo(shell, args) { WorkingDirectory = root, UseShellExecute = false,
                 CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
             using (var helper = new Process { StartInfo = start })
@@ -286,17 +294,63 @@ internal sealed class ControlPanel : Form
     private void ApplySharedHost(string result)
     {
         if (exiting) return;
+        starting = false;
+        awaitingDesktopExit = result == "desktop-running" || result == "ready-to-start";
         Uri endpoint;
         if (Uri.TryCreate(result, UriKind.Absolute, out endpoint) && endpoint.Scheme == "ws" &&
             endpoint.Host == "127.0.0.1" && endpoint.Port >= 1024 && endpoint.AbsolutePath == "/" &&
             endpoint.UserInfo.Length == 0 && endpoint.Query.Length == 0 && endpoint.Fragment.Length == 0)
         {
+            if (!ReleaseBridgeForSwitch())
+            {
+                sharedHint = "共享服务已启动，请退出并重开 Remote Coding。";
+                Log("Could not release the previous web bridge for shared mode.");
+                return;
+            }
+            sharedHint = null;
+            error.Text = "关闭此窗口后继续在托盘运行；右键托盘可退出。";
             LaunchBridge(endpoint.AbsoluteUri, false);
             return;
         }
-        if (result == "desktop-running") sharedHint = "若连接不上，请完整退出 Codex 和本托盘，再双击 Remote Coding。";
+        if (result == "desktop-running")
+        {
+            sharedHint = "请完整退出 Codex。托盘会自动用新版连接重新打开。";
+            Log("Shared startup is waiting for Codex to exit.");
+        }
         if (result == "failed") sharedHint = "新版连接启动失败。退出本托盘后重试，可检查 .local\\launcher.log。";
-        LaunchBridge(null, false);
+        if (bridge == null) LaunchBridge(null, false);
+    }
+    private bool ReleaseBridgeForSwitch()
+    {
+        if (bridge == null) return true;
+        if (!bridge.HasExited)
+        {
+            if (runtime == null) return false;
+            try { LocalPost("/api/local/exit", "{}"); } catch (Exception e) { Log(e.Message); }
+            if (!bridge.WaitForExit(2000)) return false;
+        }
+        bridge.Dispose(); bridge = null;
+        runtime = null; waiting = 0; addresses.Items.Clear();
+        return true;
+    }
+    private static bool CodexDesktopRunning()
+    {
+        var processes = Process.GetProcessesByName("ChatGPT");
+        try
+        {
+            foreach (var process in processes)
+            {
+                try
+                {
+                    var path = process.MainModule.FileName;
+                    if (path.IndexOf(@"\WindowsApps\OpenAI.Codex_", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                }
+                catch (InvalidOperationException) { }
+                catch (System.ComponentModel.Win32Exception) { if (!process.HasExited) return true; }
+            }
+            return false;
+        }
+        finally { foreach (var process in processes) process.Dispose(); }
     }
     private void LaunchBridge(string sharedEndpoint, bool keepConfiguredToken)
     {
@@ -355,7 +409,8 @@ internal sealed class ControlPanel : Form
                 var data = json.Deserialize<Dictionary<string, object>>(client.DownloadString(LocalUrl("/api/local/status")));
                 var connected = Convert.ToBoolean(data["connected"]);
                 status.Text = connected ? (sharedMode ? "● 共享服务已连接 · 请在 Codex 打开原会话" : "● Codex 桌面已连接")
-                    : (sharedMode ? "○ 正在连接共享服务" : "○ 等待电脑上的 Codex 打开");
+                    : (starting ? "○ 正在切换新版连接…" : sharedMode ? "○ 正在连接共享服务"
+                    : awaitingDesktopExit && sharedRequested ? "○ 等待 Codex 完整退出" : "○ 等待电脑上的 Codex 打开");
                 status.ForeColor = connected ? Color.FromArgb(66, 107, 81) : Color.FromArgb(157, 122, 54);
                 tray.Text = connected ? (sharedMode ? "Remote Coding · 共享服务已连接" : "Remote Coding · Codex 已连接") : "Remote Coding · 等待 Codex";
                 stats.Text = "桥接内存 " + data["memoryMb"] + " MB    在线 " + data["streams"] + "    已记住 " + data["remembered"] + " 台";
@@ -363,6 +418,8 @@ internal sealed class ControlPanel : Form
                 pair.Text = lanMode.Checked ? "局域网免配对已开启" : "配对码  " + runtime["pairCode"].ToString();
                 if (!connected && sharedHint != null) error.Text = sharedHint;
                 else if (addresses.SelectedItem != null && addresses.SelectedItem.ToString().Contains("127.0.0.1")) error.Text = "未发现局域网地址，请连接 Wi-Fi 或网线后重启程序。";
+                if (!connected && awaitingDesktopExit && sharedRequested && !starting && !CodexDesktopRunning())
+                    CheckSharedConnection(false);
             }
         }
         catch (Exception e) { Log(e.Message); }
@@ -400,7 +457,7 @@ internal sealed class ControlPanel : Form
         }
         catch (Exception e) { error.Text = "二维码加载失败，可手动输入地址与配对码。"; Log(e.Message); }
     }
-    private void ShowPanel() { startHidden = false; Show(); WindowState = FormWindowState.Normal; Activate(); }
+    private void ShowPanel() { sharedRequested = true; startHidden = false; Show(); WindowState = FormWindowState.Normal; Activate(); }
     private void ExitApp()
     {
         if (exiting) return; exiting = true; timer.Stop();

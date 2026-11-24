@@ -14,3 +14,21 @@ export async function copyText(text, {navigator:nav=globalThis.navigator,documen
   }
   if(!copied)throw new Error('浏览器未允许复制，请长按或选中文字复制');
 }
+
+export function readMessageSelection(selection, messages) {
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return null;
+  const bodyOf = node => {
+    const element = node?.nodeType === 1 ? node : node?.parentElement;
+    return element?.closest('button,summary,input,textarea') ? null : element?.closest('.message-body');
+  };
+  const body = bodyOf(selection.anchorNode);
+  if (!body || !messages.contains(body) || body !== bodyOf(selection.focusNode)) return null;
+  const text = selection.toString().trim();
+  return text ? { text, source: body.closest('.message.user') ? '你' : 'Codex' } : null;
+}
+
+export function withQuotedText(text, quote) {
+  if (!quote) return text;
+  const lines = quote.text.split(/\r\n?|\n/).map(line => '> ' + line);
+  return [`> 引用 · ${quote.source}`, ...lines, ...(text ? ['', text] : [])].join('\n');
+}

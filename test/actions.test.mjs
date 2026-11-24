@@ -5,7 +5,7 @@ import {join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {UploadStore,safeFileName,MAX_UPLOAD} from '../src/uploads.mjs';
 import {ForkService} from '../src/forks.mjs';
-import {copyText} from '../public/clipboard.js';
+import {copyText,readMessageSelection,withQuotedText} from '../public/clipboard.js';
 import {messagesFromTurns} from '../src/state.mjs';
 import {Bridge} from '../src/bridge.mjs';
 import {EventEmitter} from 'node:events';
@@ -63,6 +63,21 @@ test('clipboard denied API uses click fallback and restores the draft caret',asy
   const doc={activeElement:draft,body:{append(){}},createElement:()=>input,execCommand:()=>{copied=input.value;return true;}};
   await copyText('reply',{navigator:{clipboard:{writeText:async()=>{throw new Error('denied');}}},document:doc});
   assert.equal(copied,'reply');assert.ok(focused&&removed);assert.deepEqual(caret,[2,4]);
+});
+test('quoting accepts one chat message body and ignores controls or cross-message selections', () => {
+  const reply = { closest: () => null }, user = { closest: () => user };
+  const messages = { contains: value => [reply, user].includes(value) };
+  const nodeIn = (body, control = false) => ({ parentElement: { closest: selector => selector === '.message-body' ? body : control ? {} : null } });
+  const selection = { rangeCount: 1, isCollapsed: false, anchorNode: nodeIn(reply), focusNode: nodeIn(reply), toString: () => '  第一行\n第二行  ' };
+  assert.deepEqual(readMessageSelection(selection, messages), { text: '第一行\n第二行', source: 'Codex' });
+  const userSelection = { ...selection, anchorNode: nodeIn(user), focusNode: nodeIn(user) };
+  assert.equal(readMessageSelection(userSelection, messages).source, '你');
+  assert.equal(readMessageSelection({ ...selection, focusNode: nodeIn(user) }, messages), null);
+  assert.equal(readMessageSelection({ ...selection, focusNode: nodeIn(reply, true) }, messages), null);
+  assert.equal(readMessageSelection({ ...selection, anchorNode: nodeIn(null) }, messages), null);
+  assert.equal(readMessageSelection({ ...selection, isCollapsed: true }, messages), null);
+  assert.equal(withQuotedText('接着做', { text: '第一行\r\n第二行', source: 'Codex' }), '> 引用 · Codex\n> 第一行\n> 第二行\n\n接着做');
+  assert.equal(withQuotedText('普通消息'), '普通消息');
 });
 test('attachments route as local images and file references through the existing desktop turn',async()=>{
   const ipc=new EventEmitter();ipc.clientId='test';ipc.close=()=>{};let call;ipc.request=async(method,params)=>{call={method,params};return{result:{accepted:true}};};

@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createOutbox} from '../public/outbox.js';
+import {withQuotedText} from '../public/clipboard.js';
 let serial=0;const box=()=>createOutbox({newId:()=>String(++serial)});
 const payload={text:'先检查，不执行',files:[],skills:[],references:[]};
 const active={writable:true,busy:true,turnId:'one',status:'running',pendingCount:0};
@@ -15,6 +16,15 @@ test('queued messages send once for the exact original completed turn',()=>{
   for(const view of [active,{...completed,pendingCount:1},{...completed,writable:false}])assert.equal(q.observe('chat',view),null);
   assert.equal(q.observe('other',completed),null);assert.equal(q.observe('chat',completed),e);
   assert.equal(q.observe('chat',completed),null);assert.equal(q.reserve(e.id),null);q.done(e.id);assert.equal(q.list('chat').length,0);
+});
+test('a queued excerpt is preserved until the original turn finishes', () => {
+  const q = box(), quote = { text: '先检查第一项', source: 'Codex' };
+  const entry = q.hold('chat', { ...payload, quote });
+  q.arm(entry.id, active);
+  assert.equal(q.observe('chat', active), null);
+  const ready = q.observe('chat', completed);
+  assert.equal(withQuotedText(ready.payload.text, ready.payload.quote), '> 引用 · Codex\n> 先检查第一项\n\n先检查，不执行');
+  assert.equal(q.observe('chat', completed), null);
 });
 test('stopped, failed and superseded turns cancel automatic sending rather than steering a new task',()=>{
   for(const changed of [{...completed,status:'stopped',completionKey:null},{...completed,status:'error',completionKey:null},{...completed,completionKey:null},{...active,turnId:'two'},{...completed,completionKey:'two'}]){

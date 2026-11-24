@@ -1,7 +1,7 @@
 import { createReadTracker } from './read-state.js?v=32';
 import {sameTier,speedKind,speedNames,speedPicker} from './service-tier.js?v=51';
 import {createNotifications,pendingKey} from './notifications.js?v=32';
-import {copyText} from './clipboard.js?v=33';
+import { copyText, readMessageSelection, withQuotedText } from './clipboard.js?v=52';
 import {inlineParts} from './inline-format.js?v=45';
 import {createOutbox} from './outbox.js?v=44';
 const $ = id => document.getElementById(id);
@@ -9,6 +9,8 @@ const effortNames = { none: '无', minimal: '最低', low: '低', medium: '中',
 let csrf, currentId = null, source, writable = false, busy = false, sending = false, uncertain = false;
 let historyCursor = null, threadNext = null, listQuery = '', listGeneration = 0, openGeneration = 0;
 const drafts = new Map(), messageMap = new Map(), messageNodes = new Map();
+const quoteDrafts = new Map();
+let quoteSelection, quoteOnPress;
 const attachmentDrafts=new Map(), forkRequests=new Map(); let branchSelection=null;
 const outbox=createOutbox({newId:()=>uuid()}),liveViews=new Map();
 let outboxSignature='';
@@ -165,7 +167,7 @@ function showPair() {
   disconnect(); $('pair-view').hidden = false; $('workspace').hidden = true;
   csrf = null; writable = false; currentId = null; messageMap.clear(); messageNodes.clear(); messageOrder = [];
   notices.reset();collapseNotice();$('notifications-overlay').hidden=true;renderNotices();
-  $('messages').replaceChildren(); $('draft').value = ''; drafts.clear();
+  $('messages').replaceChildren(); $('draft').value = ''; drafts.clear(); quoteDrafts.clear(); clearQuoteSelection();
   contexts.clear(); inputDrafts.clear(); inputStates.clear(); selectedSkills = []; selectedThreads = []; renderContext();
   quotaData = null; lastQuotaCheck = 0; renderHeaderQuota(); $('quota-windows').textContent = '连接后读取额度'; $('quota-updated').textContent = '当前电脑登录的 Codex 账号';
   $('picker-overlay').hidden = true; closeImage();
@@ -336,8 +338,8 @@ function renderOutbox() {
   for(const entry of entries){
     const card=document.createElement('article');card.className='pending-card';card.dataset.queueId=entry.id;
     const state=document.createElement('small');state.hidden=entry.state==='armed';state.textContent=({held:'队列已暂停',armed:'等待本轮完成后发送',sending:'正在发送…',unknown:'发送结果待核对，勿重复发送'})[entry.state];
-    const text=document.createElement('p');text.textContent=entry.payload.text||'附件消息';
-    const meta=document.createElement('span');meta.className='pending-meta';meta.textContent=[entry.payload.files.length?entry.payload.files.length+' 个附件':'',entry.payload.skills.length?entry.payload.skills.length+' 个 Skill':'',entry.payload.references.length?entry.payload.references.length+' 个会话引用':'',entry.error].filter(Boolean).join(' · ');
+    const text=document.createElement('p');text.textContent=entry.payload.text||entry.payload.quote?.text||'附件消息';
+    const meta=document.createElement('span');meta.className='pending-meta';meta.textContent=[entry.payload.files.length?entry.payload.files.length+' 个附件':'',entry.payload.skills.length?entry.payload.skills.length+' 个 Skill':'',entry.payload.references.length?entry.payload.references.length+' 个会话引用':'',entry.payload.quote?'含文字引用':'',entry.error].filter(Boolean).join(' · ');
     card.append(state,text);if(meta.textContent)card.append(meta);
     const actions=document.createElement('div');actions.className='pending-actions';card.append(actions);
     const add=(label,action,disabled=false)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.disabled=disabled;button.onclick=action;actions.append(button);};
@@ -350,16 +352,17 @@ function renderOutbox() {
 }
 function editQueued(id){
   const entry=outbox.get(id);if(!entry||['sending','unknown'].includes(entry.state))return;
-  if($('draft').value.trim()||currentAttachments().length||selectedSkills.length||selectedThreads.length){toast('先处理当前草稿，再编辑暂存消息');return;}
+  if($('draft').value.trim()||currentAttachments().length||selectedSkills.length||selectedThreads.length||quoteDrafts.has(currentId)){toast('先处理当前草稿，再编辑暂存消息');return;}
   outbox.remove(id);attachmentDrafts.set(currentId,entry.payload.files);selectedSkills=entry.payload.skills;selectedThreads=entry.payload.references;
+  if (entry.payload.quote) quoteDrafts.set(currentId, entry.payload.quote);
   $('draft').value=entry.payload.text;renderContext();renderAttachments();$('draft').oninput();$('draft').focus();updateComposer();
 }
 function stageDraft(){
   if($('send').disabled||activeProvider!=='codex')return;
   try{
-    const entry=outbox.hold(currentId,{text:$('draft').value.trim(),files:currentAttachments().slice(),skills:selectedSkills.slice(),references:selectedThreads.slice()});
+    const entry=outbox.hold(currentId,{text:$('draft').value.trim(),quote:quoteDrafts.get(currentId),files:currentAttachments().slice(),skills:selectedSkills.slice(),references:selectedThreads.slice()});
     const armed=outbox.arm(entry.id,liveViews.get(currentId));
-    attachmentDrafts.set(currentId,[]);drafts.delete(currentId);contexts.delete(currentId);selectedSkills=[];selectedThreads=[];
+    attachmentDrafts.set(currentId,[]);drafts.delete(currentId);quoteDrafts.delete(currentId);contexts.delete(currentId);selectedSkills=[];selectedThreads=[];
     $('draft').value='';$('draft').style.height='auto';renderContext();renderAttachments();updateComposer();
     toast(armed?'已加入队列，完成后自动继续':'当前轮已变化，消息保留在队列中');
   }catch(err){toast(err.message);}
@@ -371,8 +374,8 @@ async function dispatchQueued(id,{reserved=false}={}){
   if(!reserved&&!outbox.reserve(id))return;
   const generation=openGeneration,mode=busy?'steer':'message';sending=true;updateComposer();
   try{
-    const {text,files,skills,references}=entry.payload;
-    const result=await post(`/api/threads/${entry.threadId}/send`,{text,messageId:entry.requestId,uploadIds:files.map(f=>f.id),mode,skillIds:skills.map(s=>s.id),referenceIds:references.map(r=>r.id)});
+    const {text,quote,files,skills,references}=entry.payload;
+    const result=await post(`/api/threads/${entry.threadId}/send`,{text:withQuotedText(text,quote),messageId:entry.requestId,uploadIds:files.map(f=>f.id),mode,skillIds:skills.map(s=>s.id),referenceIds:references.map(r=>r.id)});
     outbox.done(id,{mode,turnId:result.result?.turn?.id||result.result?.turnId||null});for(const file of files)if(file.preview)URL.revokeObjectURL(file.preview);
     toast(mode==='steer'?'引导已交给 Codex':'暂存消息已发送');
   }catch(err){
@@ -384,9 +387,13 @@ async function dispatchQueued(id,{reserved=false}={}){
 function updateComposer() {
   $('draft').disabled = !currentId;
   const files=currentAttachments();
-  $('send').disabled = !writable || (busy && activeProvider !== 'codex') || sending || uncertain || files.some(f=>f.uploading||f.error) || (!$('draft').value.trim()&&!files.length);
+  const draft = $('draft').value.trim();
+  const length = withQuotedText(draft, quoteDrafts.get(currentId)).length;
+  $('send').disabled = !writable || (busy && activeProvider !== 'codex') || sending || uncertain || files.some(f=>f.uploading||f.error) || length > 8000 || (!draft&&!files.length);
   $('attach-image').disabled=$('attach-file').disabled=!currentId||sending||uncertain||activeProvider!=='codex';
   for(const button of $('draft-attachments').querySelectorAll('button'))button.disabled=sending||uncertain;
+  const removeQuote = $('selected-context').querySelector('.draft-quote button');
+  if (removeQuote) removeQuote.disabled = sending || uncertain;
   const steering = busy && activeProvider === 'codex';
   $('send').textContent = '发送'; $('send').classList.remove('steer');
   $('send').setAttribute('aria-label','发送消息');
@@ -394,10 +401,11 @@ function updateComposer() {
   const currentRequests=requestsNow.filter(r=>!r.historical);
   $('stop').hidden = !writable || !busy; $('activity').hidden = !busy || currentRequests.length>0;
   $('draft-note').textContent = uncertain ? '发送结果待确认，请先核对桌面消息，不要重复发送' : writable&&currentRequests.length ? '待操作 · 请处理会话里的问题或审批' : busy ? '执行中 · 发送后排队，完成后自动继续' : writable ? '消息会交给当前桌面会话执行' : '查看历史 · 在电脑打开此会话后可发送';
-  $('char-count').textContent = $('draft').value.length > 5000 ? `${$('draft').value.length}/8000` : '';
+  $('char-count').textContent = length > 8000 ? '草稿和引用共 '+length+'/8000' : length > 5000 ? `${length}/8000` : '';
   $('model-settings').disabled = !writable || activeProvider !== 'codex';
   if (!$('settings-overlay').hidden && settingsBaseline?.id === currentId) populateSpeed();
-  $('pick-thread').disabled = !currentId || sending || activeProvider !== 'codex';
+  $('pick-thread').disabled = !currentId || sending || uncertain || activeProvider !== 'codex';
+  paintQuoteButton();
   $('pick-skill').disabled = !currentId || sending || activeProvider !== 'codex';
   document.querySelector('.context-actions').hidden = activeProvider !== 'codex';
   $('model-settings').title = activeProvider === 'codex' ? '选择模型、思考档位和回复速度' : '模型设置请在电脑端处理';
@@ -860,9 +868,34 @@ function questionForm(req) {
   return form;
 }
 
+function paintQuoteButton() {
+  const button = $('pick-thread');
+  const ready = !button.disabled && !!(quoteSelection || quoteOnPress);
+  if (button.hasAttribute('data-quote-ready') === ready) return;
+  button.toggleAttribute('data-quote-ready', ready);
+  button.setAttribute('aria-label', ready ? '引用选中的文字' : '引用会话');
+  button.title = ready ? '引用选中的文字' : '引用会话';
+}
+function clearQuoteSelection() {
+  quoteSelection = quoteOnPress = null;
+  paintQuoteButton();
+}
+
 function saveContext() { if (currentId) contexts.set(currentId, { skills: [...selectedSkills], threads: [...selectedThreads] }); }
 function renderContext() {
   const container = $('selected-context'); container.replaceChildren();
+  const quote = quoteDrafts.get(currentId);
+  if (quote) {
+    const card = document.createElement('div'); card.className = 'draft-quote';
+    const content = document.createElement('div');
+    const label = document.createElement('strong'); label.textContent = '引用 · ' + quote.source;
+    const excerpt = document.createElement('span'); excerpt.textContent = quote.text;
+    content.append(label, excerpt);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×';
+    remove.setAttribute('aria-label', '移除文字引用'); remove.disabled = sending || uncertain;
+    remove.onclick = () => { quoteDrafts.delete(currentId); renderContext(); updateComposer(); };
+    card.append(content, remove); container.append(card);
+  }
   for (const [type, items] of [['skill', selectedSkills], ['thread', selectedThreads]]) for (const item of items) {
     const chip = document.createElement('button'); chip.type = 'button'; chip.className = 'context-chip';
     const name = item.displayName || item.name || item.title;
@@ -1133,6 +1166,7 @@ function connectEvents(id, generation) {
 async function openThread(id, title) {
   clearTimeout(desktopOpenTimer);
   if (currentId) { drafts.set(currentId, $('draft').value); saveContext(); }
+  clearQuoteSelection();
   currentId = id; const generation = ++openGeneration; disconnect();
   if(noticeJump?.id!==id)noticeJump=null;
   displayedCompletionKey=null;
@@ -1185,6 +1219,7 @@ function renderIntegration(error = '') {
 }
 async function changeProvider(provider) {
   if (currentId) { drafts.set(currentId, $('draft').value); saveContext(); }
+  clearQuoteSelection();
   disconnect(); ++openGeneration; activeProvider = provider; sessionStorage.setItem('rc_provider', provider);
   notices.reset();collapseNotice();renderNotices();
   currentId = null; writable = false; busy = false; sending = false; uncertain = false; listQuery = ''; $('search').value = '';
@@ -1228,7 +1263,35 @@ $('open-desktop').onclick = async () => {
   finally { openingDesktop = false; if (id === currentId) $('open-desktop').disabled = false; }
 };
 $('pick-skill').onclick = () => openPicker('skills');
-$('pick-thread').onclick = () => openPicker('threads');
+document.addEventListener('selectionchange', () => {
+  quoteSelection = currentId && activeProvider === 'codex' ? readMessageSelection(document.getSelection(), $('messages')) : null;
+  paintQuoteButton();
+});
+const quoteButton = $('pick-thread');
+document.addEventListener('pointerdown', event => {
+  if (!quoteButton.contains(event.target) && quoteOnPress) {
+    quoteOnPress = null;
+    paintQuoteButton();
+  }
+}, { capture: true, passive: true });
+quoteButton.addEventListener('pointerdown', () => {
+  // Mobile browsers can clear the native selection before the tap reaches click.
+  quoteOnPress = readMessageSelection(document.getSelection(), $('messages')) || quoteSelection;
+});
+quoteButton.addEventListener('pointercancel', () => { quoteOnPress = null; paintQuoteButton(); });
+quoteButton.addEventListener('mousedown', event => {
+  if (event.button === 0 && (quoteOnPress || quoteSelection)) event.preventDefault();
+});
+quoteButton.onclick = () => {
+  const selection = document.getSelection();
+  const quote = readMessageSelection(selection, $('messages')) || quoteOnPress;
+  clearQuoteSelection();
+  if (!quote) { openPicker('threads'); return; }
+  if (withQuotedText('', quote).length > 8000) { toast('选中的文字太长，请缩短选区再引用'); return; }
+  quoteDrafts.set(currentId, quote);
+  selection?.removeAllRanges();
+  renderContext(); updateComposer();
+};
 $('close-picker').onclick = $('picker-done').onclick = closePicker;
 $('picker-overlay').onclick = event => { if (event.target === $('picker-overlay')) closePicker(); };
 $('picker-more').onclick = () => loadPicker(true);
@@ -1265,12 +1328,14 @@ $('send').onclick = () => {if(busy&&activeProvider==='codex')stageDraft();else s
 async function sendDraft(mode) {
   if ($('send').disabled) return;
   const text = $('draft').value.trim(), id = currentId, generation = openGeneration, messageId = uuid();
+  const quote = quoteDrafts.get(id);
   sending = true; updateComposer();
   try {
     const files=currentAttachments().slice();
-    const result = await post(threadPath(id, 'send'), { text, messageId, uploadIds:files.map(f=>f.id), mode, skillIds: selectedSkills.map(s => s.id), referenceIds: selectedThreads.map(t => t.id) });
+    const result = await post(threadPath(id, 'send'), { text: withQuotedText(text,quote), messageId, uploadIds:files.map(f=>f.id), mode, skillIds: selectedSkills.map(s => s.id), referenceIds: selectedThreads.map(t => t.id) });
     const remaining=(attachmentDrafts.get(id)||[]).filter(f=>!files.includes(f));attachmentDrafts.set(id,remaining);for(const file of files)if(file.preview)URL.revokeObjectURL(file.preview);
     drafts.delete(id);
+    if (quoteDrafts.get(id) === quote) quoteDrafts.delete(id);
     contexts.delete(id);
     if (generation === openGeneration) { selectedSkills = []; selectedThreads = []; renderContext();renderAttachments(); $('draft').value = ''; $('draft').style.height = 'auto'; toast(result.kind === 'steered' ? '引导已追加到当前任务' : result.pending ? '已排入本机通道，等待 Claude Code 处理' : '已交给电脑上的 ' + providerNames[activeProvider]); }
   } catch (err) {

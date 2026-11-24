@@ -28,7 +28,13 @@ A lightweight, self-hosted web companion for your computer's Codex desktop chats
 
 **做决定。** 已适配的审批、选择和填写表单，可以直接在手机提交给原会话。系统登录、文件选择窗口等仍需在电脑处理。
 
-**带上上下文。** 搜索并选择 Skill、引用其他会话，或为下一轮调整模型和思考档位。
+**带上上下文。** 搜索并选择 Skill，或引用其他会话。
+
+**按模型选择回复速度。** 点输入框下方的模型名称，可以分别调整思考档位和回复速度。以演示中的模型目录为例，GPT-6.2 Sol 显示「标准、加速、超级加速」，GPT-6.2 Astra 显示「标准、加速」。档位来自本机 Codex，打开设置时更新目录，无需后台轮询。
+
+切换到不支持当前速度的模型时，网页会请你重新选择。保存经桌面确认后，输入框旁会显示生效的档位，下一轮使用新设置。加速档位会更快消耗额度。
+
+<p><img src="docs/previews/model-settings.png" width="360" alt="手机界面示意：Sol 提供标准、加速、超级加速，切到 Astra 后只有标准和加速"></p>
 
 **直接看生成图。** Codex 内置生成的成品图片按同一轮合并为图片组，显示在回复下方；手机上两列缩略图，点开放大、左右切换，也可保存原图。历史会话同样支持。仅读取已保存的成品图，不展示生成提示词和原始工具结果；原文件已删除时会提示无法读取。
 
@@ -86,10 +92,9 @@ A lightweight, self-hosted web companion for your computer's Codex desktop chats
   <img src="docs/previews/question.png" width="320" alt="手机网页：选择与填写问答">
   <img src="docs/previews/notification.png" width="320" alt="手机网页：输入时收到轻量会话提示">
   <img src="docs/previews/notifications-list.png" width="320" alt="手机网页：待操作优先的提示列表">
-  <img src="docs/previews/model-settings.png" width="320" alt="手机网页的模型与思考档位设置">
 </p>
 
-依次为对话与引导、选择问答、浮动气泡、提示列表，以及模型与加速设置。
+依次为对话与引导、选择问答、浮动气泡和提示列表。
 
 </details>
 

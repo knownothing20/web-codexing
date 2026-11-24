@@ -686,6 +686,16 @@ function renderMessage(message) {
     const label = document.createElement('span'); label.className = 'progress-tag'; label.textContent = '进度';
     const preview = document.createElement('span'); preview.className = 'progress-preview'; preview.textContent = message.text.replace(/\*\*|`/g, '').slice(0, 70);
     summary.append(label, preview); addTime(summary, message); details.append(summary, body); el.append(details);
+    if (activeProvider === 'codex' && message.role === 'assistant') {
+      const text = message.text.replace(/:codex-annotation\{index="\d+"\}/g, '').trim();
+      if (text) {
+        const actions = document.createElement('div'); actions.className = 'progress-actions';
+        const quote = document.createElement('button'); quote.type = 'button'; quote.textContent = '引用';
+        quote.setAttribute('aria-label', '引用整条进度');
+        quote.onclick = () => setDraftQuote({ text, source: 'Codex' });
+        actions.append(quote); details.append(actions);
+      }
+    }
     summary.onclick = event => {
       event.preventDefault();
       manualProgress.set(message.id, !details.open); details.open = !details.open;
@@ -879,6 +889,15 @@ function paintQuoteButton() {
 function clearQuoteSelection() {
   quoteSelection = quoteOnPress = null;
   paintQuoteButton();
+}
+function setDraftQuote(quote) {
+  if (!currentId || activeProvider !== 'codex') return;
+  if (sending || uncertain) { toast('请先核对当前消息的发送状态'); return; }
+  if (withQuotedText('', quote).length > 8000) { toast('引用文字太长，请选中其中一段再引用'); return; }
+  quoteDrafts.set(currentId, quote);
+  clearQuoteSelection();
+  document.getSelection()?.removeAllRanges();
+  renderContext(); updateComposer();
 }
 
 function saveContext() { if (currentId) contexts.set(currentId, { skills: [...selectedSkills], threads: [...selectedThreads] }); }
@@ -1283,14 +1302,10 @@ quoteButton.addEventListener('mousedown', event => {
   if (event.button === 0 && (quoteOnPress || quoteSelection)) event.preventDefault();
 });
 quoteButton.onclick = () => {
-  const selection = document.getSelection();
-  const quote = readMessageSelection(selection, $('messages')) || quoteOnPress;
-  clearQuoteSelection();
-  if (!quote) { openPicker('threads'); return; }
-  if (withQuotedText('', quote).length > 8000) { toast('选中的文字太长，请缩短选区再引用'); return; }
-  quoteDrafts.set(currentId, quote);
-  selection?.removeAllRanges();
-  renderContext(); updateComposer();
+  const quote = readMessageSelection(document.getSelection(), $('messages')) || quoteOnPress;
+  quoteOnPress = null;
+  if (quote) setDraftQuote(quote);
+  else { clearQuoteSelection(); openPicker('threads'); }
 };
 $('close-picker').onclick = $('picker-done').onclick = closePicker;
 $('picker-overlay').onclick = event => { if (event.target === $('picker-overlay')) closePicker(); };

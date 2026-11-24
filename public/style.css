@@ -146,6 +146,7 @@
 .progress-details summary::-webkit-details-marker{display:none}
 .progress-details summary::after{content:'⌄';margin-left:auto;font-size:14px;color:#99a48e;flex-shrink:0}
 .progress-details[open] summary::after{content:'⌃'}
+.progress-actions{display:flex;justify-content:flex-end;padding:0 10px 6px}.progress-actions button{min-height:36px;min-width:44px;padding:4px 8px;border:1px solid #cbdcc5;border-radius:8px;background:#e9f2e4;color:var(--accent);font-size:11px}.progress-actions button:hover{background:#dfeeda}
 .progress-tag{font-size:9px;letter-spacing:1px;color:#769260;background:#e6eddc;padding:2px 6px;border-radius:4px;flex-shrink:0}
 .progress-preview{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .message.assistant.progress{margin-bottom:15px}

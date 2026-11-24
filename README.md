@@ -86,7 +86,7 @@ A lightweight, self-hosted web companion for your computer's Codex desktop chats
   <img src="docs/previews/question.png" width="320" alt="手机网页：选择与填写问答">
   <img src="docs/previews/notification.png" width="320" alt="手机网页：输入时收到轻量会话提示">
   <img src="docs/previews/notifications-list.png" width="320" alt="手机网页：待操作优先的提示列表">
-  <img src="docs/previews/model-settings.png" width="320" alt="手机网页：模型、思考档位与加速同步开关">
+  <img src="docs/previews/model-settings.png" width="320" alt="手机网页的模型与思考档位设置">
 </p>
 
 依次为对话与引导、选择问答、浮动气泡、提示列表，以及模型与加速设置。
@@ -103,7 +103,7 @@ A lightweight, self-hosted web companion for your computer's Codex desktop chats
 | 审批与问答 | 转发已适配的命令 / 文件修改审批、选择题和填写表单，保留原问题标识 |
 | 跨会话转发 | 显示原生转发正文及来源，长消息可折叠、复制、跳转；来源仍需在本机可访问 |
 | 定时任务记录 | 显示创建、更新、查看回执中的任务名称、频率和当时状态；当前任务管理仍在电脑端操作 |
-| 模型、思考档位与加速 | 手机紧凑列表与档位按钮；打开设置时检查本机模型目录更新，无后台轮询；开关与当前桌面会话同步，客户端确认后下一轮生效 |
+| 模型、思考档位与回复速度 | 打开设置时更新本机模型目录，无后台轮询。按模型显示标准、加速或超级加速，桌面确认后从下一轮生效 |
 | Skills 与会话引用 | 搜索当前工作目录可用 Skill；引用其他会话作为当前消息上下文 |
 | 图片与视频 | 真实缩略图、点击放大、同条消息内切换与图片滑动；视频按需点播、分段读取、进度拖动、播放器全屏、原文件下载；关闭或后台停止传输 |
 | 消息阅读 | 时间、消息和代码复制、正式回复按轮次分支、进度折叠、展开某条消息后的所有进度、回到最新消息 |

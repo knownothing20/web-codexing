@@ -5,7 +5,7 @@
   <meta name="theme-color" content="#f7f8f5"><meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/manifest.webmanifest"><link rel="icon" href="/icon.svg">
-  <link rel="stylesheet" href="/style.css?v=50"><title>Remote Coding</title>
+  <link rel="stylesheet" href="/style.css?v=51"><title>Remote Coding</title>
 </head>
 <body>
   <section id="pair-view" class="pair-view">
@@ -54,7 +54,7 @@
         <textarea id="draft" rows="1" placeholder="发消息给电脑上的 Codex…" aria-label="消息输入框" maxlength="8000" disabled></textarea>
         <div class="context-actions"><details id="attach-menu" class="attach-menu"><summary aria-label="添加图片或文件" title="添加附件">＋</summary><div class="attach-options"><button id="attach-image" type="button" disabled>▧ 上传图片</button><button id="attach-file" type="button" disabled>▤ 上传文件</button></div></details><button id="pick-thread" class="context-button" aria-label="＋ 引用会话" disabled>＋ 引用会话</button><button id="pick-skill" class="context-button" aria-label="＋ Skill" disabled>＋ Skill</button></div>
         <input id="image-upload" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/heic,image/heif" multiple hidden><input id="file-upload" type="file" multiple hidden>
-        <div class="composer-actions"><button id="model-settings" class="model-button" aria-label="选择模型、思考档位和加速" disabled><span id="model-label">桌面会话设置</span><span class="model-chevron">⌄</span></button><div><button id="stop" class="stop-button" hidden>■ 停止</button><button id="send" class="send-button" disabled aria-label="发送消息">↑</button></div></div>
+        <div class="composer-actions"><button id="model-settings" class="model-button" aria-label="选择模型、思考档位和回复速度" disabled><span id="model-label">桌面会话设置</span><span class="model-chevron">⌄</span></button><div><button id="stop" class="stop-button" hidden>■ 停止</button><button id="send" class="send-button" disabled aria-label="发送消息">↑</button></div></div>
       </div><div class="composer-note"><span id="draft-note">消息会交给当前桌面会话执行</span><span id="char-count"></span></div></div>
       <div id="toast" class="toast" role="status" hidden></div>
     </main>
@@ -97,13 +97,14 @@
       <label id="effort-choice-label">思考档位</label><select id="effort-select" hidden disabled></select>
       <div id="effort-choices" class="effort-choices" role="group" aria-labelledby="effort-choice-label"></div>
       <p class="effort-note">更高档位通常需要更多时间。当前正在执行的回复继续使用原设置。</p>
-      <div class="fast-setting"><label for="fast-mode"><strong>模型加速 <span id="fast-status">正在读取…</span></strong><small>跟随电脑端设置</small></label><input id="fast-mode" type="checkbox" role="switch" disabled aria-describedby="fast-note"></div>
-      <p id="fast-note" class="fast-note">开启后会更快消耗额度。</p>
+      <label id="speed-choice-label">回复速度</label>
+      <div id="speed-choices" class="effort-choices speed-choices" role="group" aria-labelledby="speed-choice-label" aria-describedby="speed-note"></div>
+      <p id="speed-note" class="speed-note" aria-live="polite"></p>
       <div id="settings-error" class="error" role="alert"></div>
       <button id="save-settings" class="primary" disabled>保存到当前会话 <span>↗</span></button>
       <p class="settings-foot">模型列表来自本机 Codex。实际可用性以执行结果为准。</p>
     </section>
   </div>
   <dialog id="branch-dialog" class="branch-dialog"><h2>分支到新会话</h2><p>新会话保留到这条回复为止的记录，之后的内容不会带入。原会话和未发送的草稿会保留。</p><p id="branch-error" class="error" role="status"></p><div><button id="cancel-branch" type="button">取消</button><button id="confirm-branch" type="button">创建分支</button></div></dialog>
-  <script src="/app.js?v=50" type="module"></script>
+  <script src="/app.js?v=51" type="module"></script>
 </body></html>

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {Bridge} from '../src/bridge.mjs';
 import {publicConversation,serviceTierState} from '../src/state.mjs';
-import {accelerated,effectiveTier,fastTier,sameTier} from '../public/service-tier.js';
+import {accelerated,effectiveTier,fastTier,sameTier,speedKind,speedPicker} from '../public/service-tier.js';
 
 function setup(initial='priority',{publish=true}={}) {
  const ipc=new EventEmitter();ipc.clientId='client';ipc.close=()=>{};const calls=[],updates=[];
@@ -32,6 +32,22 @@ test('speed aliases and inherited defaults are distinguished from an explicit st
  assert.equal(sameTier(null,'default'),false);assert.equal(sameTier('unrecognized','unrecognized'),false);
 });
 
+test('the speed picker follows each model catalog and requires a choice before dropping Ultrafast', () => {
+ const both = { serviceTiers: [{ id: 'priority' }, { id: 'ultrafast' }] };
+ const fastOnly = { serviceTiers: [{ id: 'fast' }] };
+ const desktop = { serviceTier: 'ultrafast', serviceTierKnown: true };
+ const speed = speedPicker(both, desktop);
+ assert.deepEqual(speed.choices.map(choice => choice.id), ['default', 'priority', 'ultrafast']);
+ assert.equal(speed.selected.id, 'ultrafast');
+ assert.equal(speedPicker(fastOnly, { ...desktop, modelChanged: true }).needsChoice, true);
+ assert.equal(speedPicker(fastOnly, { ...desktop, modelChanged: true, draft: 'fast' }).selected.id, 'fast');
+ assert.equal(speedPicker(fastOnly, desktop).needsChoice, false);
+ assert.equal(speedPicker({}, desktop).choices.length, 1);
+ assert.equal(speedPicker(both, { ...desktop, serviceTierKnown: false }).selected, undefined);
+ assert.equal(speedKind(null, both), 'standard');
+ assert.equal(speedKind(null, { ...both, defaultServiceTier: 'priority' }), 'fast');
+});
+
 test('phone projection includes only the tier and its presence, never private thread settings',()=>{
  const state={id:'chat',turns:[],latestThreadSettings:{serviceTier:'priority',privateSetting:'private-value'}};
  const view=publicConversation(state);assert.equal(view.serviceTier,'priority');assert.equal(view.serviceTierKnown,true);
@@ -40,7 +56,7 @@ test('phone projection includes only the tier and its presence, never private th
  assert.deepEqual(serviceTierState({latestThreadSettings:{serviceTier:null}}),{serviceTier:null,serviceTierKnown:true});
 });
 
-for(const [initial,desired] of [['priority','default'],['default','priority']])test('native speed setting '+initial+' -> '+desired+' waits for actual desktop state',async()=>{
+for(const [initial,desired] of [['priority','default'],['default','priority'],['priority','ultrafast'],['ultrafast','default']])test('native speed setting '+initial+' -> '+desired+' waits for actual desktop state',async()=>{
  const {bridge,calls,updates}=setup(initial);
  try {
   const result=await bridge.settings('chat',{...request,serviceTier:desired,previousServiceTier:initial});
